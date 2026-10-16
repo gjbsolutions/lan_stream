@@ -813,11 +813,17 @@
   function handleFrameConnSender(conn) {
     if (frameConn && frameConn.open) { try { conn.close(); } catch (e) {} return; }
     frameConn = conn;
-    conn.on('open', () => {
+
+    const onOpen = () => {
       resetFrameSendStats();
       startFrameLoop();
       updateBadge();
-    });
+    };
+    // PeerJS can fire the 'open' event before we attach a listener in rare
+    // races, so also call onOpen immediately if the connection is already up.
+    if (conn.open) onOpen();
+    else conn.on('open', onOpen);
+
     conn.on('close', () => {
       if (frameConn !== conn) return;
       frameConn = null;
@@ -906,12 +912,16 @@
       metadata: { kind: 'frame' }
     });
     frameConn = fc;
-    fc.on('open', () => {
+
+    const onOpen = () => {
       viewerWait.classList.add('hidden');
       remoteImg.classList.remove('hidden');
       resetFrameRecvStats();
       startViewerStats();
-    });
+    };
+    if (fc.open) onOpen();
+    else fc.on('open', onOpen);
+
     fc.on('data', handleFrameDataViewer);
     fc.on('close', () => {
       if (frameConn !== fc) return;
@@ -996,7 +1006,7 @@
   }
 
   async function tickFrame() {
-    if (!frameConn || frameConn.readyState !== 'open') return;
+    if (!frameConn || !frameConn.open) return;
     if (framePending) return;
     if (sentAt.size >= MAX_IN_FLIGHT) { framesSkipped++; return; }
     if (frameConn.bufferedAmount > FRAME_BUFFER_LIMIT) { framesSkipped++; return; }
@@ -1032,7 +1042,7 @@
       if (!blob) return;
 
       // Re-check everything after the async encode.
-      if (!frameConn || frameConn.readyState !== 'open') return;
+      if (!frameConn || !frameConn.open) return;
       if (sentAt.size >= MAX_IN_FLIGHT) return;
       if (frameConn.bufferedAmount > FRAME_BUFFER_LIMIT) return;
 
@@ -1201,7 +1211,7 @@
   }
 
   function updateBadge() {
-    if (!frameConn || frameConn.readyState !== 'open') {
+    if (!frameConn || !frameConn.open) {
       if (stream || preview.src || preview.dataset.objectUrl) streamingBadge.textContent = '\u23F3 Ready, waiting for viewer\u2026';
       else streamingBadge.textContent = '';
       return;
@@ -1558,7 +1568,7 @@
   }
 
   /* ============================================================
-     SERIAL BRIDGE (unchanged from original)
+     SERIAL BRIDGE
      ============================================================ */
   function initSerialUI() {
     if (serialUIReady) return;
