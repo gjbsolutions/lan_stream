@@ -1,0 +1,1216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>LAN Stream - WebRTC Video + Remote + Serial</title>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<style>
+  :root {
+    --bg:#0f172a; --card:#1e293b; --card2:#273449; --fg:#e2e8f0;
+    --muted:#94a3b8; --accent:#38bdf8; --ok:#34d399;
+    --bad:#f87171; --border:#334155; --warn:#fbbf24;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; padding: 12px;
+    min-height: 100vh; overscroll-behavior: none;
+  }
+  h1 { font-size: 20px; margin: 0 0 12px 0; text-align: center; letter-spacing: .3px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px; margin-bottom: 12px;
+  }
+  button, .btn {
+    background: var(--accent); color: #04212f; border: 0;
+    padding: 12px 18px; font-size: 16px; font-weight: 600;
+    border-radius: 10px; cursor: pointer; font-family: inherit;
+    text-decoration: none; display: inline-block; text-align: center;
+    transition: transform .05s;
+  }
+  button:active, .btn:active { transform: translateY(1px); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+  button.small { padding: 8px 12px; font-size: 13px; }
+  input[type="text"] {
+    width: 100%; padding: 14px; font-size: 22px; text-align: center;
+    background: var(--bg); border: 1px solid var(--border); color: var(--fg);
+    border-radius: 10px; letter-spacing: 8px; font-weight: 700; margin-bottom: 12px;
+  }
+  input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  input[type="file"] {
+    width: 100%; padding: 14px; color: var(--muted); font-size: 14px;
+    background: var(--card2); border: 1px dashed var(--border);
+    border-radius: 10px; cursor: pointer;
+  }
+  select {
+    width: 100%; padding: 12px; font-size: 15px; font-family: inherit;
+    background: var(--card2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 10px;
+    cursor: pointer;
+  }
+  select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  video {
+    width: 100%; max-height: 55vh; background: #000;
+    border-radius: 10px; border: 1px solid var(--border);
+  }
+  #setup { max-width: 380px; margin: 8vh auto 0; text-align: center; width: 100%; }
+  #setup p { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
+  #setup .row { display: flex; gap: 8px; }
+  #setup .row button { flex: 1; }
+  .hidden { display: none !important; }
+  #main { max-width: 900px; margin: 0 auto; width: 100%; flex: 1; display: flex; flex-direction: column; }
+  #header {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  #header h1 { margin: 0; font-size: 18px; }
+  #status { margin-left: auto; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: none; }
+  .dot.ok { background: var(--ok); }
+  .dot.warn { background: var(--warn); }
+  .label { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  #viewerWait {
+    padding: 40px 20px; text-align: center; color: var(--muted);
+    background: var(--card); border: 1px dashed var(--border);
+    border-radius: 12px; font-size: 15px;
+  }
+  #viewerWait b { color: var(--fg); display: block; margin-bottom: 6px; font-size: 16px; }
+  #playOverlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.7);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100; cursor: pointer;
+  }
+  #playOverlay div {
+    background: var(--accent); color: #04212f;
+    padding: 18px 32px; border-radius: 12px;
+    font-size: 18px; font-weight: 700;
+  }
+  .controls { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  code { background: var(--card2); padding: 2px 5px; border-radius: 4px; font-size: 11px; }
+
+  /* ================= Source mode tabs ================= */
+  .modeTabs {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px;
+  }
+  .modeTabs button {
+    background: var(--card2); color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 12px 10px; font-size: 14px; font-weight: 600; border-radius: 10px;
+    transition: background .12s, color .12s, border-color .12s;
+  }
+  .modeTabs button.active {
+    background: var(--accent); color: #04212f; border-color: var(--accent);
+  }
+  .modeTabs button .ico { font-size: 18px; display: block; margin-bottom: 2px; }
+  .camRow { display: flex; gap: 8px; align-items: stretch; }
+  .camRow select { flex: 1; min-width: 0; }
+  .camRow button { flex: none; white-space: nowrap; }
+  @media (max-width: 480px) {
+    .camRow { flex-direction: column; }
+    .camRow button { width: 100%; }
+  }
+
+  /* ================= Serial bridge ================= */
+  .serialRow { display: flex; gap: 8px; align-items: stretch; }
+  .serialRow select { flex: 1; }
+  .serialRow button { flex: none; white-space: nowrap; }
+  @media (max-width: 480px) {
+    .serialRow { flex-direction: column; }
+    .serialRow button { width: 100%; }
+  }
+  .serialStatus {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--muted); margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .switchLabel {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--muted); cursor: pointer;
+    margin-left: auto;
+  }
+  .switchLabel input { accent-color: var(--accent); }
+  #serialLog {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.45;
+    background: #0a0f1a; color: #b8c4d4;
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px; height: 160px; overflow-y: auto;
+    margin-top: 10px; white-space: pre-wrap; word-break: break-all;
+  }
+  #serialLog .tx { color: var(--accent); }
+  #serialLog .rx { color: var(--ok); }
+  #serialLog .sys { color: var(--warn); }
+  #serialLog .err { color: var(--bad); }
+
+  /* ================= Remote control (viewer) ================= */
+  #remotePanel { margin-top: 4px; }
+  .remoteGrid {
+    display: grid; grid-template-columns: auto auto; gap: 24px;
+    align-items: center; justify-content: center; padding: 12px 0;
+  }
+  @media (max-width: 480px) {
+    .remoteGrid { grid-template-columns: 1fr; gap: 18px; }
+  }
+  .dpad {
+    display: grid;
+    grid-template-columns: repeat(3, 64px);
+    grid-template-rows: repeat(3, 64px);
+    gap: 6px; justify-content: center;
+  }
+  .dpad button {
+    background: var(--card2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 12px;
+    font-size: 26px; font-weight: 700; padding: 0; line-height: 1;
+    user-select: none; touch-action: manipulation;
+    transition: background .08s, transform .05s, border-color .08s;
+  }
+  .dpad button:hover { border-color: var(--accent); }
+  .dpad button.pressed {
+    background: var(--accent); color: #04212f; border-color: var(--accent);
+    transform: scale(0.96);
+  }
+  .dpad .pos-up    { grid-column: 2; grid-row: 1; }
+  .dpad .pos-left  { grid-column: 1; grid-row: 2; }
+  .dpad .pos-right { grid-column: 3; grid-row: 2; }
+  .dpad .pos-down  { grid-column: 2; grid-row: 3; }
+  .toggleBox {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    justify-content: center;
+  }
+  .toggleBox .tglTitle {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); font-weight: 600;
+  }
+  .toggleBtn {
+    width: 110px; height: 110px; border-radius: 50%;
+    background: var(--card2); border: 2px solid var(--border);
+    color: var(--muted); font-size: 15px; font-weight: 800;
+    letter-spacing: .1em; padding: 0;
+    user-select: none; touch-action: manipulation;
+    transition: background .15s, color .15s, border-color .15s, box-shadow .15s, transform .05s;
+    display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 6px;
+  }
+  .toggleBtn .tglIcon { font-size: 30px; line-height: 1; }
+  .toggleBtn.on {
+    background: rgba(52,211,153,.18); color: var(--ok); border-color: var(--ok);
+    box-shadow: 0 0 0 4px rgba(52,211,153,.15), 0 0 24px rgba(52,211,153,.25) inset;
+  }
+  .toggleBtn:active { transform: scale(0.96); }
+
+  /* ================= Sender status panel ================= */
+  #senderCtrlCard .panel {
+    display: grid; grid-template-columns: auto auto; gap: 24px;
+    align-items: center; justify-content: center; padding: 8px 0;
+  }
+  @media (max-width: 480px) {
+    #senderCtrlCard .panel { grid-template-columns: 1fr; gap: 18px; }
+  }
+  .dpadView {
+    display: grid;
+    grid-template-columns: repeat(3, 64px);
+    grid-template-rows: repeat(3, 64px);
+    gap: 6px; justify-content: center;
+  }
+  .dpadView .cell {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; font-weight: 700; color: var(--muted);
+    position: relative;
+    transition: background .08s, color .08s, border-color .08s, box-shadow .12s;
+  }
+  .dpadView .cell.active {
+    background: var(--accent); color: #04212f; border-color: var(--accent);
+    box-shadow: 0 0 18px rgba(56,189,248,.55);
+  }
+  .dpadView .pos-up    { grid-column: 2; grid-row: 1; }
+  .dpadView .pos-left  { grid-column: 1; grid-row: 2; }
+  .dpadView .pos-right { grid-column: 3; grid-row: 2; }
+  .dpadView .pos-down  { grid-column: 2; grid-row: 3; }
+  .dpadView .pos-center {
+    grid-column: 2; grid-row: 2;
+    background: transparent; border: 1px dashed var(--border);
+    font-size: 11px; letter-spacing: .1em; color: var(--muted);
+  }
+  .toggleView {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    justify-content: center;
+  }
+  .toggleView .tglTitle {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); font-weight: 600;
+  }
+  .tglDisplay {
+    width: 110px; height: 110px; border-radius: 50%;
+    background: var(--bg); border: 2px solid var(--border);
+    color: var(--muted); font-size: 22px; font-weight: 800; letter-spacing: .12em;
+    display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px;
+    transition: background .15s, color .15s, border-color .15s, box-shadow .15s;
+  }
+  .tglDisplay .tglIcon { font-size: 26px; line-height: 1; }
+  .tglDisplay.on {
+    background: rgba(52,211,153,.18); color: var(--ok); border-color: var(--ok);
+    box-shadow: 0 0 0 4px rgba(52,211,153,.15), 0 0 24px rgba(52,211,153,.25) inset;
+  }
+  .stateRow {
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px; margin-top: 14px;
+  }
+  .stateChip {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 4px; text-align: center;
+    font-size: 11px; color: var(--muted); line-height: 1.3;
+    transition: background .08s, color .08s, border-color .08s;
+  }
+  .stateChip .k {
+    display: block; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; margin-bottom: 2px;
+    color: var(--fg); font-size: 11px;
+  }
+  .stateChip .v { display: block; font-size: 11px; }
+  .stateChip.on {
+    background: rgba(52,211,153,.12); border-color: var(--ok); color: var(--ok);
+  }
+  .stateChip.on .k { color: var(--ok); }
+  .stateChip.pressed {
+    background: rgba(56,189,248,.18); border-color: var(--accent); color: var(--accent);
+  }
+  .stateChip.pressed .k { color: var(--accent); }
+  #lastCmd {
+    font-size: 12px; color: var(--muted);
+    text-align: center; margin-top: 10px; font-variant-numeric: tabular-nums;
+  }
+  #senderPreviewWrap.hidden, #remotePanel.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<!-- ============ SETUP ============ -->
+<div id="setup">
+  <h1>LAN Stream</h1>
+  <div class="card">
+    <p>Enter a 4-digit code, then <b>Create Room</b> to host, or <b>Join Room</b> to watch.</p>
+    <input type="text" id="joinCode" placeholder="1234" maxlength="4" inputmode="numeric" autocomplete="off">
+    <div class="row">
+      <button id="joinBtn">Join Room</button>
+      <button id="createBtn" class="secondary">Create Room</button>
+    </div>
+  </div>
+  <div id="setupStatus" class="note"></div>
+</div>
+
+<!-- ============ MAIN ============ -->
+<div id="main" class="hidden">
+  <div id="header">
+    <h1>LAN Stream</h1>
+    <div id="status"><span class="dot" id="dot"></span><span id="statusText">connecting…</span></div>
+  </div>
+
+  <!-- ---------- Sender side ---------- -->
+  <div id="senderCard" class="card hidden">
+    <p class="label">Stream source</p>
+
+    <div class="modeTabs">
+      <button data-mode="file" class="active"><span class="ico">📁</span>Video file</button>
+      <button data-mode="camera"><span class="ico">📷</span>Camera</button>
+    </div>
+
+    <div id="filePanel">
+      <input type="file" id="fileInput" accept="video/*">
+    </div>
+
+    <div id="cameraPanel" class="hidden">
+      <div class="camRow">
+        <select id="camSelect"></select>
+        <button id="camStartBtn">Start camera</button>
+      </div>
+      <div class="note">
+        UVC USB webcams appear here automatically. Your browser will ask for camera and microphone permission.
+      </div>
+    </div>
+
+    <div id="senderPreviewWrap" class="hidden" style="margin-top:14px;">
+      <video id="preview" controls playsinline muted></video>
+      <div class="controls">
+        <button id="muteToggle" class="secondary small">🔊 Mute outgoing audio</button>
+        <span id="streamingBadge" class="note">Streaming live</span>
+      </div>
+      <div class="note" id="senderHint">
+        The viewer sees exactly what this player shows.
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- Sender: remote status panel ---------- -->
+  <div id="senderCtrlCard" class="card hidden">
+    <p class="label">Remote control status</p>
+
+    <div class="panel">
+      <div class="dpadView">
+        <div class="cell pos-up"    data-cell="up">↑</div>
+        <div class="cell pos-left"  data-cell="left">←</div>
+        <div class="cell pos-center">CTRL</div>
+        <div class="cell pos-right" data-cell="right">→</div>
+        <div class="cell pos-down"  data-cell="down">↓</div>
+      </div>
+
+      <div class="toggleView">
+        <div class="tglTitle">Toggle</div>
+        <div class="tglDisplay" id="tglDisplay">
+          <span class="tglIcon">⏻</span>
+          <span id="tglDisplayText">OFF</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stateRow">
+      <div class="stateChip" id="chip-up">
+        <span class="k">↑ Up</span><span class="v">released</span>
+      </div>
+      <div class="stateChip" id="chip-down">
+        <span class="k">↓ Down</span><span class="v">released</span>
+      </div>
+      <div class="stateChip" id="chip-left">
+        <span class="k">← Left</span><span class="v">released</span>
+      </div>
+      <div class="stateChip" id="chip-right">
+        <span class="k">→ Right</span><span class="v">released</span>
+      </div>
+      <div class="stateChip" id="chip-toggle">
+        <span class="k">Toggle</span><span class="v">OFF</span>
+      </div>
+    </div>
+
+    <div id="lastCmd">No commands received yet.</div>
+  </div>
+
+  <!-- ---------- Sender: serial bridge to ESP32 ---------- -->
+  <div id="serialCard" class="card hidden">
+    <p class="label">ESP32 serial bridge (Web Serial)</p>
+
+    <div id="serialUnsupported" class="hidden" style="color:var(--warn); font-size:13px;">
+      ⚠ Web Serial is not available in this browser. Use <b>Chrome</b> or <b>Edge</b> on a desktop.
+      Android and Firefox do not support Web Serial.
+    </div>
+
+    <div id="serialSupported">
+      <div class="serialRow">
+        <select id="baudSelect">
+          <option value="9600">9600</option>
+          <option value="19200">19200</option>
+          <option value="38400">38400</option>
+          <option value="57600">57600</option>
+          <option value="115200" selected>115200 (default)</option>
+          <option value="230400">230400</option>
+          <option value="460800">460800</option>
+          <option value="921600">921600</option>
+        </select>
+        <button id="serialConnectBtn">Connect serial</button>
+      </div>
+
+      <div class="serialStatus">
+        <span class="dot" id="serialDot"></span>
+        <span id="serialStatusText">Not connected</span>
+        <label class="switchLabel">
+          <input type="checkbox" id="serialBridgeChk" checked>
+          Forward commands to MCU
+        </label>
+      </div>
+
+      <div id="serialLog"></div>
+
+      <div class="controls">
+        <button id="serialTestBtn" class="secondary small">Send PING</button>
+        <button id="serialClearBtn" class="secondary small">Clear log</button>
+      </div>
+
+      <div class="note">
+        Each command is written as one line, terminated with <code>\n</code>:
+        <code>UP:PRESS</code>, <code>UP:RELEASE</code>, <code>DOWN:PRESS</code>,
+        <code>LEFT:RELEASE</code>, <code>RIGHT:PRESS</code>,
+        <code>TOGGLE:ON</code>, <code>TOGGLE:OFF</code>.
+        <br>
+        On MicroPython, read lines with <code>sys.stdin.readline()</code> and split on <code>':'</code>.
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- Viewer side ---------- -->
+  <div id="viewerCard" class="card hidden">
+    <p class="label">Incoming stream</p>
+    <div id="viewerWait">
+      <b>Waiting for the sender…</b>
+      The video will appear here as soon as they start streaming.
+    </div>
+    <video id="remote" playsinline controls autoplay class="hidden"></video>
+
+    <div id="remotePanel" class="hidden">
+      <p class="label" style="margin-top:18px;">Remote control</p>
+      <div class="remoteGrid">
+        <div class="dpad">
+          <button class="pos-up"    data-ctrl="up"    aria-label="Up">↑</button>
+          <button class="pos-left"  data-ctrl="left"  aria-label="Left">←</button>
+          <button class="pos-right" data-ctrl="right" aria-label="Right">→</button>
+          <button class="pos-down"  data-ctrl="down"  aria-label="Down">↓</button>
+        </div>
+
+        <div class="toggleBox">
+          <div class="tglTitle">Toggle</div>
+          <button class="toggleBtn" id="toggleBtn" aria-pressed="false">
+            <span class="tglIcon">⏻</span>
+            <span id="toggleBtnText">OFF</span>
+          </button>
+        </div>
+      </div>
+      <div class="note">
+        Arrows are momentary (hold to press, release to release). Toggle switches ON/OFF.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------------- Elements ---------------- */
+  const $ = id => document.getElementById(id);
+  const setup = $('setup');
+  const main = $('main');
+  const setupStatus = $('setupStatus');
+  const joinCodeInput = $('joinCode');
+  const joinBtn = $('joinBtn');
+  const createBtn = $('createBtn');
+  const senderCard = $('senderCard');
+  const senderCtrlCard = $('senderCtrlCard');
+  const serialCard = $('serialCard');
+  const viewerCard = $('viewerCard');
+  const fileInput = $('fileInput');
+  const filePanel = $('filePanel');
+  const cameraPanel = $('cameraPanel');
+  const camSelect = $('camSelect');
+  const camStartBtn = $('camStartBtn');
+  const preview = $('preview');
+  const previewWrap = $('senderPreviewWrap');
+  const remote = $('remote');
+  const viewerWait = $('viewerWait');
+  const dot = $('dot');
+  const statusText = $('statusText');
+  const muteToggle = $('muteToggle');
+  const streamingBadge = $('streamingBadge');
+  const senderHint = $('senderHint');
+  const remotePanel = $('remotePanel');
+  const toggleBtn = $('toggleBtn');
+  const toggleBtnText = $('toggleBtnText');
+
+  const serialUnsupported = $('serialUnsupported');
+  const serialSupported   = $('serialSupported');
+  const baudSelect        = $('baudSelect');
+  const serialConnectBtn  = $('serialConnectBtn');
+  const serialDot         = $('serialDot');
+  const serialStatusText  = $('serialStatusText');
+  const serialBridgeChk   = $('serialBridgeChk');
+  const serialLog         = $('serialLog');
+  const serialTestBtn     = $('serialTestBtn');
+  const serialClearBtn    = $('serialClearBtn');
+
+  /* ---------------- State ---------------- */
+  let peer = null;
+  let dataConn = null;
+  let mediaCall = null;
+  let stream = null;
+  let role = null;               // 'sender' | 'viewer'
+  let connected = false;
+  let currentMode = 'file';      // 'file' | 'camera'
+  let audioEnabled = true;
+
+  // Serial state
+  const serialSupportedFlag = ('serial' in navigator);
+  let serialPort = null;
+  let serialWriter = null;
+  let serialReader = null;
+  let serialConnected = false;
+  let serialWriteChain = Promise.resolve();
+
+  const remoteState = {
+    up: 'released', down: 'released',
+    left: 'released', right: 'released',
+    toggle: false
+  };
+
+  /* ---------------- UI helpers ---------------- */
+  function setStatus(text, ok) {
+    statusText.textContent = text;
+    dot.className = ok ? 'dot ok' : 'dot';
+  }
+  function setupError(msg) { setupStatus.textContent = msg; setupStatus.style.color = 'var(--bad)'; }
+  function setupInfo(msg)  { setupStatus.textContent = msg; setupStatus.style.color = 'var(--accent)'; }
+
+  function enterMain() {
+    setup.classList.add('hidden');
+    main.classList.remove('hidden');
+    if (role === 'sender') {
+      senderCard.classList.remove('hidden');
+      senderCtrlCard.classList.remove('hidden');
+      serialCard.classList.remove('hidden');
+    }
+    if (role === 'viewer') {
+      viewerCard.classList.remove('hidden');
+    }
+  }
+
+  function resetSetup() {
+    joinBtn.disabled = false;
+    createBtn.disabled = false;
+    joinCodeInput.disabled = false;
+  }
+
+  /* ---------------- Create room (sender) ---------------- */
+  createBtn.onclick = () => {
+    role = 'sender';
+    const code = joinCodeInput.value.trim();
+    if (!/^\d{4}$/.test(code)) {
+      setupError('Please enter a 4-digit room code before creating.');
+      joinCodeInput.focus();
+      return;
+    }
+
+    joinCodeInput.disabled = true;
+    joinBtn.disabled = true;
+    createBtn.disabled = true;
+    setupInfo('Creating room ' + code + '…');
+
+    peer = new Peer(code, { debug: 1 });
+
+    peer.on('open', (id) => {
+      setupInfo('Room ' + id + ' ready. Waiting for viewer to join…');
+      enterMain();
+      setStatus('Waiting for viewer…', false);
+      refreshCameras();
+      initSerialUI();
+    });
+
+    peer.on('connection', (conn) => {
+      if (dataConn && dataConn.open) { try { conn.close(); } catch (e) {} return; }
+      dataConn = conn;
+
+      conn.on('open', () => {
+        connected = true;
+        setStatus('Viewer connected', true);
+        if (stream) startCall(conn.peer);
+      });
+
+      conn.on('data', (data) => {
+        if (data && data.type === 'ctrl') {
+          handleCtrlCommand(data);
+        }
+      });
+
+      conn.on('close', () => {
+        connected = false;
+        setStatus('Viewer left', false);
+        resetRemoteDisplay();
+      });
+      conn.on('error', () => {});
+    });
+
+    peer.on('error', (err) => {
+      console.error(err);
+      if (err.type === 'unavailable-id') {
+        setupError('Room ' + code + ' is already taken. Pick a different code.');
+      } else {
+        setupError('Error: ' + err.type);
+      }
+      resetSetup();
+    });
+  };
+
+  /* ---------------- Join room (viewer) ---------------- */
+  joinBtn.onclick = () => {
+    const code = joinCodeInput.value.trim();
+    if (!/^\d{4}$/.test(code)) { setupError('Please enter a 4-digit room code.'); return; }
+
+    role = 'viewer';
+    joinBtn.disabled = true;
+    createBtn.disabled = true;
+    joinCodeInput.disabled = true;
+    setupInfo('Joining ' + code + '…');
+
+    peer = new Peer({ debug: 1 });
+
+    peer.on('open', () => {
+      const conn = peer.connect(code, { reliable: true });
+      dataConn = conn;
+
+      const timeout = setTimeout(() => {
+        if (!conn.open) {
+          setupError('Could not reach room ' + code + '. Check the code and try again.');
+          try { conn.close(); } catch (e) {}
+          resetSetup();
+        }
+      }, 8000);
+
+      conn.on('open', () => {
+        clearTimeout(timeout);
+        connected = true;
+        enterMain();
+        setStatus('Connected to sender', true);
+        remotePanel.classList.remove('hidden');
+      });
+      conn.on('close', () => {
+        connected = false;
+        setStatus('Sender disconnected', false);
+        remotePanel.classList.add('hidden');
+      });
+      conn.on('error', () => {});
+    });
+
+    peer.on('call', (call) => {
+      call.answer();
+      mediaCall = call;
+
+      call.on('stream', (remoteStream) => {
+        viewerWait.classList.add('hidden');
+        remote.classList.remove('hidden');
+        remote.srcObject = remoteStream;
+        remote.play().catch(() => showTapOverlay());
+      });
+
+      call.on('close', () => {
+        remote.srcObject = null;
+        remote.classList.add('hidden');
+        viewerWait.classList.remove('hidden');
+      });
+
+      call.on('error', (err) => console.error('call error', err));
+    });
+
+    peer.on('error', (err) => {
+      console.error(err);
+      setupError('Error: ' + err.type);
+      resetSetup();
+    });
+  };
+
+  /* ============================================================
+     SOURCE MODE — file vs camera
+     ============================================================ */
+
+  function setMode(mode) {
+    if (mode === currentMode) return;
+    currentMode = mode;
+
+    document.querySelectorAll('.modeTabs button').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+
+    filePanel.classList.toggle('hidden', mode !== 'file');
+    cameraPanel.classList.toggle('hidden', mode !== 'camera');
+
+    stopCurrentStream();
+    hidePreview();
+
+    if (mode === 'camera') refreshCameras();
+  }
+
+  document.querySelectorAll('.modeTabs button').forEach(btn => {
+    btn.addEventListener('click', () => setMode(btn.dataset.mode));
+  });
+
+  function hidePreview() {
+    previewWrap.classList.add('hidden');
+    try { preview.pause(); } catch (e) {}
+    preview.srcObject = null;
+    preview.removeAttribute('src');
+    try { preview.load(); } catch (e) {}
+    if (preview.dataset.objectUrl) {
+      URL.revokeObjectURL(preview.dataset.objectUrl);
+      delete preview.dataset.objectUrl;
+    }
+    streamingBadge.textContent = '';
+  }
+
+  function stopCurrentStream() {
+    if (stream) {
+      stream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+      stream = null;
+    }
+    if (mediaCall) {
+      try { mediaCall.close(); } catch (e) {}
+      mediaCall = null;
+    }
+  }
+
+  /* ---------------- File mode ---------------- */
+  fileInput.onchange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('video/')) { alert('Please pick a video file.'); return; }
+
+    stopCurrentStream();
+    hidePreview();
+
+    const url = URL.createObjectURL(file);
+    preview.dataset.objectUrl = url;
+    preview.src = url;
+    preview.muted = true;
+    preview.load();
+
+    senderHint.innerHTML = 'The viewer sees exactly what this player shows — pause, seek, and play are shared live.';
+
+    preview.onloadedmetadata = () => {
+      preview.play().then(() => {
+        if (!stream) captureFromPreview();
+        if (stream && dataConn && dataConn.open) startCall(dataConn.peer);
+        previewWrap.classList.remove('hidden');
+        applyAudioState();
+        streamingBadge.textContent = stream ? '🔴 Streaming live' : '';
+      }).catch((err) => {
+        senderHint.innerHTML = '<span style="color:var(--warn)">⚠ Autoplay blocked. Click play on the preview.</span>';
+        console.warn('play() failed:', err);
+      });
+    };
+  };
+
+  function captureFromPreview() {
+    if (typeof preview.captureStream === 'function') {
+      stream = preview.captureStream();
+    } else if (typeof preview.mozCaptureStream === 'function') {
+      stream = preview.mozCaptureStream();
+    } else {
+      alert('This browser cannot capture video from a file. Use Chrome or Edge on the sender.');
+      return;
+    }
+    if (stream.getVideoTracks().length === 0) {
+      setTimeout(() => {
+        if (preview.captureStream) stream = preview.captureStream();
+      }, 200);
+    }
+  }
+
+  /* ---------------- Camera mode ---------------- */
+  async function refreshCameras() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      const prev = camSelect.value;
+      camSelect.innerHTML = '';
+
+      if (cams.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No cameras detected';
+        camSelect.appendChild(opt);
+        return;
+      }
+
+      cams.forEach((c, i) => {
+        const opt = document.createElement('option');
+        opt.value = c.deviceId;
+        opt.textContent = c.label || ('Camera ' + (i + 1));
+        camSelect.appendChild(opt);
+      });
+
+      if (prev) {
+        const still = cams.find(c => c.deviceId === prev);
+        if (still) camSelect.value = prev;
+      }
+    } catch (err) {
+      console.warn('enumerateDevices failed', err);
+    }
+  }
+
+  camStartBtn.onclick = async () => { await startCamera(); };
+
+  async function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert('Camera API not available in this browser.');
+      return;
+    }
+
+    stopCurrentStream();
+    hidePreview();
+
+    const deviceId = camSelect.value || undefined;
+    const constraints = {
+      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'environment' },
+      audio: true
+    };
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      console.error(err);
+      alert('Could not start camera: ' + (err.message || err.name));
+      return;
+    }
+
+    preview.srcObject = stream;
+    preview.muted = true;
+    previewWrap.classList.remove('hidden');
+    senderHint.innerHTML = 'Live camera feed. The viewer sees this in real time.';
+
+    try { await preview.play(); } catch (e) { console.warn('preview play failed', e); }
+
+    await refreshCameras();
+    if (deviceId) camSelect.value = deviceId;
+
+    applyAudioState();
+
+    if (dataConn && dataConn.open) {
+      startCall(dataConn.peer);
+    } else {
+      streamingBadge.textContent = '⏳ Waiting for viewer to connect…';
+    }
+  }
+
+  /* ---------------- Outgoing audio control ---------------- */
+  function applyAudioState() {
+    if (!stream) return;
+    stream.getAudioTracks().forEach(t => { t.enabled = audioEnabled; });
+  }
+
+  muteToggle.onclick = () => {
+    audioEnabled = !audioEnabled;
+    applyAudioState();
+    muteToggle.textContent = audioEnabled
+      ? '🔊 Mute outgoing audio'
+      : '🔇 Unmute outgoing audio';
+  };
+
+  /* ---------------- Start / restart WebRTC call ---------------- */
+  function startCall(viewerPeerId) {
+    if (!stream) return;
+    if (mediaCall) { try { mediaCall.close(); } catch (e) {} mediaCall = null; }
+
+    mediaCall = peer.call(viewerPeerId, stream);
+    streamingBadge.textContent = '🔴 Streaming live';
+
+    mediaCall.on('error', (err) => {
+      console.error('call error', err);
+      streamingBadge.textContent = '⚠ Stream error: ' + err;
+    });
+    mediaCall.on('close', () => {
+      streamingBadge.textContent = 'Stream ended';
+    });
+  }
+
+  /* ---------------- Viewer: tap-to-play overlay ---------------- */
+  function showTapOverlay() {
+    if (document.getElementById('playOverlay')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'playOverlay';
+    overlay.innerHTML = '<div>▶ Tap to play</div>';
+    overlay.onclick = () => { remote.play().then(() => overlay.remove()).catch(() => {}); };
+    document.body.appendChild(overlay);
+  }
+
+  /* ============================================================
+     REMOTE CONTROL — Viewer side: send commands
+     ============================================================ */
+
+  function sendCtrl(ctrlId, state) {
+    if (!dataConn || !dataConn.open) return;
+    try {
+      dataConn.send({ type: 'ctrl', id: ctrlId, state: state, t: Date.now() });
+    } catch (e) { console.warn('send failed', e); }
+  }
+
+  function attachMomentary(btn, ctrlId) {
+    let active = false;
+
+    const press = (e) => {
+      e.preventDefault();
+      if (active) return;
+      active = true;
+      btn.classList.add('pressed');
+      try {
+        if (e.pointerId != null && btn.setPointerCapture) {
+          btn.setPointerCapture(e.pointerId);
+        }
+      } catch (_) {}
+      sendCtrl(ctrlId, 'pressed');
+    };
+
+    const release = () => {
+      if (!active) return;
+      active = false;
+      btn.classList.remove('pressed');
+      sendCtrl(ctrlId, 'released');
+    };
+
+    btn.addEventListener('pointerdown', press);
+    btn.addEventListener('pointerup', release);
+    btn.addEventListener('pointercancel', release);
+    btn.addEventListener('lostpointercapture', release);
+    btn.addEventListener('touchstart', (e) => { if (!('PointerEvent' in window)) press(e); }, { passive: false });
+    btn.addEventListener('touchend',   () => { if (!('PointerEvent' in window)) release(); });
+    btn.addEventListener('touchcancel',() => { if (!('PointerEvent' in window)) release(); });
+    btn.addEventListener('contextmenu', e => e.preventDefault());
+    btn.addEventListener('dragstart', e => e.preventDefault());
+  }
+
+  document.querySelectorAll('.dpad [data-ctrl]').forEach(btn => {
+    attachMomentary(btn, btn.dataset.ctrl);
+  });
+
+  let toggleOn = false;
+  toggleBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    toggleOn = !toggleOn;
+    toggleBtn.classList.toggle('on', toggleOn);
+    toggleBtn.setAttribute('aria-pressed', toggleOn ? 'true' : 'false');
+    toggleBtnText.textContent = toggleOn ? 'ON' : 'OFF';
+    sendCtrl('toggle', toggleOn ? 'on' : 'off');
+  });
+
+  /* ============================================================
+     REMOTE CONTROL — Sender side: display + forward to serial
+     ============================================================ */
+
+  function handleCtrlCommand(msg) {
+    const id = msg.id;
+    const state = msg.state;
+    if (id !== 'toggle' && id !== 'up' && id !== 'down' && id !== 'left' && id !== 'right') return;
+
+    if (id === 'toggle') {
+      remoteState.toggle = (state === 'on');
+    } else {
+      remoteState[id] = state;
+    }
+
+    updateRemoteDisplay();
+    updateLastCmd(id, state);
+
+    // Forward to ESP32 over USB serial
+    if (serialConnected && serialBridgeChk.checked) {
+      const line = commandToSerialLine(id, state);
+      if (line) sendSerial(line);
+    }
+  }
+
+  function commandToSerialLine(id, state) {
+    if (id === 'toggle') return 'TOGGLE:' + (state === 'on' ? 'ON' : 'OFF');
+    if (id === 'up' || id === 'down' || id === 'left' || id === 'right') {
+      return id.toUpperCase() + ':' + (state === 'pressed' ? 'PRESS' : 'RELEASE');
+    }
+    return null;
+  }
+
+  function updateRemoteDisplay() {
+    document.querySelectorAll('.dpadView .cell[data-cell]').forEach(cell => {
+      const key = cell.dataset.cell;
+      cell.classList.toggle('active', remoteState[key] === 'pressed');
+    });
+
+    ['up','down','left','right'].forEach(key => {
+      const chip = $('chip-' + key);
+      if (!chip) return;
+      const pressed = remoteState[key] === 'pressed';
+      chip.classList.toggle('pressed', pressed);
+      const v = chip.querySelector('.v');
+      if (v) v.textContent = pressed ? 'PRESSED' : 'released';
+    });
+
+    const tglChip = $('chip-toggle');
+    if (tglChip) {
+      tglChip.classList.toggle('on', remoteState.toggle);
+      const v = tglChip.querySelector('.v');
+      if (v) v.textContent = remoteState.toggle ? 'ON' : 'OFF';
+    }
+
+    const disp = $('tglDisplay');
+    const dispText = $('tglDisplayText');
+    if (disp) {
+      disp.classList.toggle('on', remoteState.toggle);
+      if (dispText) dispText.textContent = remoteState.toggle ? 'ON' : 'OFF';
+    }
+  }
+
+  function updateLastCmd(id, state) {
+    const el = $('lastCmd');
+    if (!el) return;
+    const ts = new Date().toLocaleTimeString();
+    el.textContent = 'Last: ' + id.toUpperCase() + ' → ' + state.toUpperCase() + '   (' + ts + ')';
+  }
+
+  function resetRemoteDisplay() {
+    remoteState.up = remoteState.down = remoteState.left = remoteState.right = 'released';
+    remoteState.toggle = false;
+    updateRemoteDisplay();
+    const el = $('lastCmd');
+    if (el) el.textContent = 'No commands received yet.';
+  }
+
+  /* ============================================================
+     WEB SERIAL — ESP32 bridge
+     ============================================================ */
+
+  function initSerialUI() {
+    if (!serialSupportedFlag) {
+      serialUnsupported.classList.remove('hidden');
+      serialSupported.classList.add('hidden');
+      return;
+    }
+    serialConnectBtn.addEventListener('click', onSerialConnectClick);
+    serialTestBtn.addEventListener('click', () => {
+      if (serialConnected) sendSerial('PING');
+    });
+    serialClearBtn.addEventListener('click', () => { serialLog.innerHTML = ''; });
+
+    if (navigator.serial && navigator.serial.addEventListener) {
+      navigator.serial.addEventListener('disconnect', (e) => {
+        if (serialPort && e.target === serialPort) {
+          logSerial('Device disconnected', 'sys');
+          cleanupSerial();
+        }
+      });
+    }
+  }
+
+  async function onSerialConnectClick() {
+    if (serialConnected) {
+      await disconnectSerial();
+    } else {
+      await connectSerial();
+    }
+  }
+
+  async function connectSerial() {
+    if (!serialSupportedFlag) return;
+    try {
+      serialPort = await navigator.serial.requestPort();
+      const baud = Number(baudSelect.value) || 115200;
+      await serialPort.open({ baudRate: baud });
+      serialWriter = serialPort.writable.getWriter();
+      serialConnected = true;
+      updateSerialUI(true, baud);
+      logSerial('Connected @ ' + baud + ' baud', 'sys');
+      startSerialReader();
+      // Friendly handshake so the MCU knows we're alive
+      sendSerial('HELLO');
+    } catch (err) {
+      console.error(err);
+      logSerial('Connect failed: ' + (err.message || err), 'err');
+      cleanupSerial();
+    }
+  }
+
+  async function disconnectSerial() {
+    try {
+      if (serialReader) {
+        try { await serialReader.cancel(); } catch (e) {}
+        serialReader = null;
+      }
+      if (serialWriter) {
+        try { serialWriter.releaseLock(); } catch (e) {}
+        serialWriter = null;
+      }
+      if (serialPort) {
+        try { await serialPort.close(); } catch (e) {}
+        serialPort = null;
+      }
+    } catch (err) {
+      console.warn('disconnectSerial', err);
+    } finally {
+      cleanupSerial();
+      logSerial('Disconnected', 'sys');
+    }
+  }
+
+  function cleanupSerial() {
+    serialConnected = false;
+    serialWriter = null;
+    serialReader = null;
+    serialPort = null;
+    updateSerialUI(false);
+  }
+
+  function updateSerialUI(isConnected, baud) {
+    serialDot.className = isConnected ? 'dot ok' : 'dot';
+    serialStatusText.textContent = isConnected
+      ? 'Connected' + (baud ? ' @ ' + baud + ' baud' : '')
+      : 'Not connected';
+    serialConnectBtn.textContent = isConnected ? 'Disconnect serial' : 'Connect serial';
+    serialConnectBtn.classList.toggle('secondary', isConnected);
+  }
+
+  function logSerial(text, kind) {
+    const line = document.createElement('div');
+    if (kind) line.className = kind;
+    const ts = new Date().toLocaleTimeString();
+    line.textContent = '[' + ts + '] ' + text;
+    serialLog.appendChild(line);
+    while (serialLog.childNodes.length > 200) serialLog.removeChild(serialLog.firstChild);
+    serialLog.scrollTop = serialLog.scrollHeight;
+  }
+
+  function sendSerial(line) {
+    if (!serialConnected || !serialWriter) return;
+    // Serialize writes so concurrent commands don't clobber each other.
+    serialWriteChain = serialWriteChain.then(async () => {
+      if (!serialConnected || !serialWriter) return;
+      try {
+        const bytes = new TextEncoder().encode(line + '\n');
+        await serialWriter.write(bytes);
+        logSerial('→ ' + line, 'tx');
+      } catch (err) {
+        console.error('write failed', err);
+        logSerial('Write failed: ' + (err.message || err), 'err');
+        disconnectSerial();
+      }
+    }).catch(() => {});
+    return serialWriteChain;
+  }
+
+  async function startSerialReader() {
+    if (!serialPort || !serialPort.readable) return;
+
+    const decoder = new TextDecoderStream();
+    // Pipe errors are expected when we close the port.
+    serialPort.readable.pipeTo(decoder.writable).catch(() => {});
+    const reader = decoder.readable.getReader();
+    serialReader = reader;
+
+    let buffer = '';
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        let idx;
+        while ((idx = buffer.indexOf('\n')) >= 0) {
+          let line = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 1);
+          if (line.endsWith('\r')) line = line.slice(0, -1);
+          if (line) logSerial('← ' + line, 'rx');
+        }
+        // Guard against never-ending lines
+        if (buffer.length > 4096) {
+          logSerial('← ' + buffer, 'rx');
+          buffer = '';
+        }
+      }
+    } catch (err) {
+      console.warn('serial reader ended', err);
+    } finally {
+      try { reader.releaseLock(); } catch (e) {}
+      serialReader = null;
+    }
+  }
+
+  updateRemoteDisplay();
+
+  /* Populate cameras early. */
+  refreshCameras();
+
+})();
+</script>
+</body>
+</html>
