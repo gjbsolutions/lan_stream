@@ -40,7 +40,7 @@
   input[type="text"] {
     width: 100%; padding: 14px; font-size: 22px; text-align: center;
     background: var(--bg); border: 1px solid var(--border); color: var(--fg);
-    border-radius: 10px; letter-spacing: 8px; text-indent: 8px; /* balances trailing letter-spacing */
+    border-radius: 10px; letter-spacing: 8px; text-indent: 8px;
     font-weight: 700; margin-bottom: 12px;
   }
   input[type="text"]::placeholder { color: var(--border); }
@@ -292,6 +292,17 @@
   }
   #senderPreviewWrap.hidden { display: none !important; }
 
+  /* ================= Stats lines ================= */
+  .statsLine {
+    text-align: center; margin-top: 10px;
+    font-size: 12px; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    min-height: 1.2em;
+  }
+  .statsLine.warn { color: var(--warn); }
+  .statsLine.bad  { color: var(--bad); }
+
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
@@ -405,6 +416,7 @@
     </div>
 
     <div id="lastCmd">No commands received yet.</div>
+    <div id="senderStatsLine" class="statsLine">—</div>
   </div>
 
   <!-- ---------- Sender: serial bridge to ESP32 ---------- -->
@@ -472,6 +484,8 @@
     </div>
     <video id="remote" playsinline controls autoplay class="hidden"></video>
 
+    <div id="statsLine" class="statsLine">—</div>
+
     <div id="remotePanel" class="hidden">
       <p class="label" style="margin-top:18px;">Remote control</p>
       <div class="remoteGrid">
@@ -509,6 +523,21 @@
   const KEEPALIVE_MS = 150;             // optional PRESS repeat to the MCU
   const DIRS = ['up', 'down', 'left', 'right'];
 
+  /* ---------------- Latency management ---------------- */
+  //  MAX_VIDEO_BITRATE caps the encoder so it can't overrun a weak uplink.
+  //  PANIC_VIDEO_BITRATE is the cap the watchdog asks for when latency builds.
+  //  MAX_FRAMERATE is enforced both in the encoder and on the source track.
+  const MAX_VIDEO_BITRATE  = 800_000;   // bps, normal cap. Tune to your worst-case uplink.
+  const PANIC_VIDEO_BITRATE = 200_000;  // bps, watchdog panic-mode cap.
+  const MAX_FRAMERATE      = 20;        // fps cap applied at the source.
+  const FILE_CAPTURE_FPS   = 15;        // captureStream() rate for file mode.
+  const LATENCY_POLL_MS    = 1000;      // stats poll interval.
+  const LATENCY_TRIGGER_S  = 1.0;       // avg jitter buffer delay (s) that counts as "bad".
+  const LATENCY_RTT_S      = 1.5;       // RTT (s) that counts as "bad".
+  const LATENCY_STRIKES    = 3;         // consecutive bad polls before we act.
+  const PANIC_RECOVER_S    = 3;         // seconds in panic before escalating to a restart.
+  const RESTART_COOLDOWN_MS = 10_000;   // minimum gap between call restarts.
+
   /* ---------------- Elements ---------------- */
   const $ = id => document.getElementById(id);
   const setup = $('setup');
@@ -540,6 +569,8 @@
   const remotePanel = $('remotePanel');
   const toggleBtn = $('toggleBtn');
   const toggleBtnText = $('toggleBtnText');
+  const statsLine = $('statsLine');
+  const senderStatsLine = $('senderStatsLine');
 
   const serialUnsupported = $('serialUnsupported');
   const serialSupported   = $('serialSupported');
@@ -572,6 +603,17 @@
   let stateTick = 0;
   let lastSeqRx = -1;            // sender: newest snapshot applied
   const viewerState = { up: 0, down: 0, left: 0, right: 0, toggle: 0 };
+
+  // Latency watchdog state (viewer side)
+  let statsTimer = null;
+  let statsStrikes = 0;
+  let inPanic = false;
+  let panicSince = 0;
+  let lastRestartAt = 0;
+
+  // Sender-side state
+  let panicMode = false;
+  let senderStatsTimer = null;
 
   // Serial state: Web Serial on desktop, WebUSB CDC-ACM on Android
   const hasSerial = ('serial' in navigator);
@@ -635,6 +677,7 @@
       senderCard.classList.remove('hidden');
       senderCtrlCard.classList.remove('hidden');
       serialCard.classList.remove('hidden');
+      startSenderStats();
     }
     if (role === 'viewer') {
       viewerCard.classList.remove('hidden');
@@ -673,6 +716,8 @@
 
   window.addEventListener('pagehide', () => {
     releaseAll();
+    stopViewerStats();
+    stopSenderStats();
     if (peer) { try { peer.destroy(); } catch (e) {} }
     releaseWakeLock();
   });
@@ -735,7 +780,8 @@
         lastRx = Date.now();
         if (!data) return;
         if (data.type === 'state') handleStateMsg(data);
-        else if (data.type === 'ctrl') handleCtrlCommand(data);   // old viewers
+        else if (data.type === 'ctrl') handleCtrlCommand(data);          // old viewers
+        else if (data.type === 'ctrl-latency') handleLatencyCtrl(data.action);
       });
 
       conn.on('close', () => {
@@ -799,6 +845,8 @@
       });
       conn.on('close', () => {
         stopHeartbeat();
+        stopViewerStats();
+        resetViewerLatencyState();
         closeStateChannel();
         setStatus('Sender disconnected', false);
         remotePanel.classList.add('hidden');
@@ -820,12 +868,15 @@
         remote.classList.remove('hidden');
         remote.srcObject = remoteStream;
         lowLatencyReceiver(call);
+        startViewerStats();
         remote.play().catch(() => showTapOverlay());
       });
 
       call.on('close', () => {
         if (mediaCall !== call) return;   // an older call closing after a newer stream arrived
         mediaCall = null;
+        stopViewerStats();
+        resetViewerLatencyState();
         showWaiting();
       });
 
@@ -983,19 +1034,27 @@
   };
 
   function captureFromPreview() {
+    // Cap the capture frame rate. This limits how many packets the pacer can
+    // queue in front of a slow uplink, which is the main cause of multi-second lag.
     if (typeof preview.captureStream === 'function') {
-      stream = preview.captureStream();
+      stream = preview.captureStream(FILE_CAPTURE_FPS);
     } else if (typeof preview.mozCaptureStream === 'function') {
-      stream = preview.mozCaptureStream();
+      stream = preview.mozCaptureStream(FILE_CAPTURE_FPS);
     } else {
       alert('This browser cannot capture video from a file. Use Chrome or Edge on the sender.');
       return;
     }
+    // Belt-and-suspenders: also constrain the track itself.
+    const vt = stream.getVideoTracks()[0];
+    if (vt) { try { vt.applyConstraints({ frameRate: { max: MAX_FRAMERATE } }).catch(() => {}); } catch (e) {} }
+
     if (stream.getVideoTracks().length === 0) {
       // Tracks can appear a moment late; re-capture and restart the call so the viewer gets them.
       setTimeout(() => {
         if (currentMode !== 'file' || !preview.captureStream || !preview.src) return;
-        stream = preview.captureStream();
+        stream = preview.captureStream(FILE_CAPTURE_FPS);
+        const vt2 = stream.getVideoTracks()[0];
+        if (vt2) { try { vt2.applyConstraints({ frameRate: { max: MAX_FRAMERATE } }).catch(() => {}); } catch (e) {} }
         applyAudioState();
         if (viewerReady()) startCall(dataConn.peer);
         updateBadge();
@@ -1068,7 +1127,14 @@
 
     const deviceId = camSelect.value || undefined;
     const q = camQuality.value.split('x').map(Number);
-    const base = { width: { ideal: q[0] }, height: { ideal: q[1] }, frameRate: { ideal: 30 } };
+    // Cap frame rate at the source. 20 fps is plenty for teleop and roughly
+    // halves the packet rate compared to 30 fps, which gives the carrier
+    // buffer far less to hold on to.
+    const base = {
+      width:  { ideal: q[0] },
+      height: { ideal: q[1] },
+      frameRate: { ideal: MAX_FRAMERATE, max: MAX_FRAMERATE }
+    };
     const video = deviceId ? Object.assign({ deviceId: { exact: deviceId } }, base)
                            : Object.assign({ facingMode: 'environment' }, base);
 
@@ -1083,6 +1149,8 @@
     const vt = stream.getVideoTracks()[0];
     if (vt) {
       try { vt.contentHint = 'motion'; } catch (e) {}
+      // Re-assert the cap: getUserMedia hints are advisory.
+      try { await vt.applyConstraints({ frameRate: { max: MAX_FRAMERATE } }); } catch (e) {}
       vt.onended = () => {
         streamingBadge.textContent = '\u26A0 Camera disconnected';
         if (mediaCall) { try { mediaCall.close(); } catch (e) {} mediaCall = null; }
@@ -1131,7 +1199,8 @@
     const call = peer.call(viewerPeerId, stream);
     mediaCall = call;
     updateBadge();
-    if (currentMode === 'camera') tuneSender(call);
+    // Apply bitrate/framerate caps for BOTH modes, not just camera.
+    tuneSender(call);
 
     call.on('error', (err) => {
       console.error('call error', err);
@@ -1157,7 +1226,10 @@
     } catch (e) { console.warn('low-latency tuning skipped', e); }
   }
 
-  // Sender (camera only): drop resolution before frame rate when the link is poor.
+  // Sender: cap bitrate and frame rate; prefer 'balanced' degradation so the
+  // encoder is willing to drop frames under congestion rather than deepen the
+  // queue. Previously this used 'maintain-framerate', which is the wrong choice
+  // on a collapsing cellular uplink.
   function tuneSender(call, attempt) {
     attempt = attempt || 0;
     let done = false;
@@ -1167,12 +1239,192 @@
       senders.forEach(s => {
         const p = s.getParameters();
         if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-        p.degradationPreference = 'maintain-framerate';
+        p.encodings[0].maxBitrate = panicMode ? PANIC_VIDEO_BITRATE : MAX_VIDEO_BITRATE;
+        p.encodings[0].maxFramerate = MAX_FRAMERATE;
+        p.degradationPreference = 'balanced';
         s.setParameters(p).catch(() => {});
         done = true;
       });
     } catch (e) { /* retry below */ }
     if (!done && attempt < 4 && mediaCall === call) setTimeout(() => tuneSender(call, attempt + 1), 500);
+  }
+
+  // Change just the bitrate cap on the live call (used by panic/restore).
+  function applyBitrate(bps) {
+    if (!mediaCall) return;
+    try {
+      const pc = mediaCall.peerConnection;
+      if (!pc) return;
+      pc.getSenders().forEach(s => {
+        if (!s.track || s.track.kind !== 'video') return;
+        try {
+          const p = s.getParameters();
+          if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+          p.encodings[0].maxBitrate = bps;
+          s.setParameters(p).catch(() => {});
+        } catch (e) {}
+      });
+    } catch (e) {}
+  }
+
+  /* ---------------- Latency watchdog: sender side ---------------- */
+  // Triggered by the viewer sending { type:'ctrl-latency', action } on the reliable channel.
+  function handleLatencyCtrl(action) {
+    if (action === 'panic') {
+      panicMode = true;
+      applyBitrate(PANIC_VIDEO_BITRATE);
+      logSerial('Watchdog: panic mode (' + (PANIC_VIDEO_BITRATE / 1000) + ' kbps)', 'sys');
+    } else if (action === 'restore') {
+      panicMode = false;
+      applyBitrate(MAX_VIDEO_BITRATE);
+      logSerial('Watchdog: restored', 'sys');
+    } else if (action === 'restart') {
+      panicMode = false;
+      logSerial('Watchdog: restarting call', 'sys');
+      if (stream && dataConn && dataConn.open) startCall(dataConn.peer);
+    }
+  }
+
+  /* ---------------- Latency watchdog: viewer side ---------------- */
+  function resetViewerLatencyState() {
+    statsStrikes = 0;
+    inPanic = false;
+    panicSince = 0;
+    if (statsLine) { statsLine.textContent = '—'; statsLine.className = 'statsLine'; }
+  }
+
+  function startViewerStats() {
+    stopViewerStats();
+    resetViewerLatencyState();
+    statsTimer = setInterval(pollViewerStats, LATENCY_POLL_MS);
+  }
+  function stopViewerStats() {
+    if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+  }
+
+  function sendLatencyCtrl(action) {
+    if (!dataConn || !dataConn.open) return;
+    try { dataConn.send({ type: 'ctrl-latency', action }); } catch (e) {}
+  }
+
+  async function pollViewerStats() {
+    if (!mediaCall || !mediaCall.peerConnection) return;
+    let avgJbd = 0, rttS = null, freeze = 0, dropped = 0, decoded = 0;
+    try {
+      const stats = await mediaCall.peerConnection.getStats();
+      let jbd = 0, jbc = 0;
+      stats.forEach(r => {
+        if (r.type === 'inbound-rtp' && r.kind === 'video') {
+          jbd = r.jitterBufferDelay || 0;
+          jbc = r.jitterBufferEmittedCount || 0;
+          freeze = r.freezeCount || 0;
+          dropped = r.framesDropped || 0;
+          decoded = r.framesDecoded || 0;
+        }
+        if (r.type === 'candidate-pair' && r.selected && r.state === 'succeeded') {
+          if (r.currentRoundTripTime != null) rttS = r.currentRoundTripTime;
+        }
+      });
+      avgJbd = jbc > 0 ? jbd / jbc : 0;
+    } catch (e) {
+      return;
+    }
+
+    // Chrome's jitterBufferTarget decays back toward its own estimate; re-apply.
+    try {
+      mediaCall.peerConnection.getReceivers().forEach(recv => {
+        if ('jitterBufferTarget' in recv) recv.jitterBufferTarget = JITTER_TARGET_MS;
+      });
+    } catch (e) {}
+
+    updateViewerStatsLine(avgJbd, rttS, freeze, dropped);
+
+    const bad = (avgJbd > LATENCY_TRIGGER_S) || (rttS != null && rttS > LATENCY_RTT_S);
+    if (bad) {
+      statsStrikes++;
+      if (statsStrikes >= LATENCY_STRIKES) {
+        statsStrikes = 0;
+        handleLatencyBreach();
+      }
+    } else {
+      statsStrikes = 0;
+      if (inPanic) {
+        inPanic = false;
+        panicSince = 0;
+        sendLatencyCtrl('restore');
+      }
+    }
+  }
+
+  function handleLatencyBreach() {
+    const now = Date.now();
+    if (!inPanic) {
+      inPanic = true;
+      panicSince = now;
+      sendLatencyCtrl('panic');
+      return;
+    }
+    // Already in panic. Wait out the recovery window before escalating.
+    if (now - panicSince <= PANIC_RECOVER_S * 1000) return;
+    if (now - lastRestartAt < RESTART_COOLDOWN_MS) return;
+    lastRestartAt = now;
+    inPanic = false;
+    panicSince = 0;
+    sendLatencyCtrl('restart');
+  }
+
+  function updateViewerStatsLine(jbdS, rttS, freeze, dropped) {
+    if (!statsLine) return;
+    const parts = [];
+    parts.push('jit ' + jbdS.toFixed(2) + 's');
+    if (rttS != null) parts.push('rtt ' + (rttS * 1000).toFixed(0) + 'ms');
+    parts.push('frz ' + freeze);
+    parts.push('drop ' + dropped);
+    statsLine.textContent = parts.join('  \u00b7  ');
+    statsLine.className = 'statsLine' + (jbdS > LATENCY_TRIGGER_S ? ' bad' : (jbdS > 0.4 ? ' warn' : ''));
+  }
+
+  /* ---------------- Sender stats ---------------- */
+  function startSenderStats() {
+    stopSenderStats();
+    senderStatsTimer = setInterval(pollSenderStats, LATENCY_POLL_MS);
+  }
+  function stopSenderStats() {
+    if (senderStatsTimer) { clearInterval(senderStatsTimer); senderStatsTimer = null; }
+  }
+
+  async function pollSenderStats() {
+    if (!senderStatsLine) return;
+    if (!mediaCall || !mediaCall.peerConnection) {
+      senderStatsLine.textContent = '—';
+      senderStatsLine.className = 'statsLine';
+      return;
+    }
+    let avgSendDelay = 0, qlr = '', rttS = null;
+    try {
+      const stats = await mediaCall.peerConnection.getStats();
+      let sendDelay = 0, sentPackets = 0;
+      stats.forEach(r => {
+        if (r.type === 'outbound-rtp' && r.kind === 'video') {
+          sendDelay = r.totalPacketSendDelay || 0;
+          sentPackets = r.packetsSent || 0;
+          qlr = r.qualityLimitationReason || '';
+        }
+        if (r.type === 'candidate-pair' && r.selected && r.state === 'succeeded') {
+          if (r.currentRoundTripTime != null) rttS = r.currentRoundTripTime;
+        }
+      });
+      avgSendDelay = sentPackets > 0 ? sendDelay / sentPackets : 0;
+    } catch (e) { return; }
+
+    const parts = [];
+    parts.push('sendq ' + avgSendDelay.toFixed(2) + 's');
+    if (rttS != null) parts.push('rtt ' + (rttS * 1000).toFixed(0) + 'ms');
+    if (qlr) parts.push('lim ' + qlr);
+    if (panicMode) parts.push('PANIC');
+    senderStatsLine.textContent = parts.join('  \u00b7  ');
+    senderStatsLine.className = 'statsLine' +
+      (panicMode ? ' bad' : (avgSendDelay > 0.5 ? ' warn' : ''));
   }
 
   /* ---------------- Control snapshots (unreliable channel) ---------------- */
