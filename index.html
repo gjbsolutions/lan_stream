@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LAN Stream - WebRTC Video + Remote + Serial</title>
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <style>
@@ -17,30 +17,33 @@
     background: var(--bg); color: var(--fg);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     display: flex; flex-direction: column; padding: 12px;
-    min-height: 100vh; overscroll-behavior: none;
+    min-height: 100vh; min-height: 100dvh; overscroll-behavior: none;
   }
   h1 { font-size: 20px; margin: 0 0 12px 0; text-align: center; letter-spacing: .3px; }
   .card {
     background: var(--card); border: 1px solid var(--border);
     border-radius: 14px; padding: 16px; margin-bottom: 12px;
   }
-  button, .btn {
+  button {
     background: var(--accent); color: #04212f; border: 0;
     padding: 12px 18px; font-size: 16px; font-weight: 600;
     border-radius: 10px; cursor: pointer; font-family: inherit;
-    text-decoration: none; display: inline-block; text-align: center;
-    transition: transform .05s;
+    text-align: center; transition: transform .05s;
   }
-  button:active, .btn:active { transform: translateY(1px); }
+  button:active { transform: translateY(1px); }
   button:disabled { opacity: .5; cursor: not-allowed; }
   button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
   button.small { padding: 8px 12px; font-size: 13px; }
+  button:focus-visible, select:focus-visible, input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
   input[type="text"] {
     width: 100%; padding: 14px; font-size: 22px; text-align: center;
     background: var(--bg); border: 1px solid var(--border); color: var(--fg);
-    border-radius: 10px; letter-spacing: 8px; font-weight: 700; margin-bottom: 12px;
+    border-radius: 10px; letter-spacing: 8px; text-indent: 8px; /* balances trailing letter-spacing */
+    font-weight: 700; margin-bottom: 12px;
   }
-  input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  input[type="text"]::placeholder { color: var(--border); }
   input[type="file"] {
     width: 100%; padding: 14px; color: var(--muted); font-size: 14px;
     background: var(--card2); border: 1px dashed var(--border);
@@ -52,7 +55,6 @@
     border: 1px solid var(--border); border-radius: 10px;
     cursor: pointer;
   }
-  select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   select:disabled { opacity: .6; cursor: not-allowed; }
   video {
     width: 100%; max-height: 55vh; background: #000;
@@ -132,9 +134,9 @@
   .switchLabel {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 13px; color: var(--muted); cursor: pointer;
-    margin-left: auto;
   }
   .switchLabel input { accent-color: var(--accent); }
+  .serialOpts { display: flex; gap: 16px; flex-wrap: wrap; margin-left: auto; }
   #serialLog {
     font-family: ui-monospace, Menlo, Consolas, monospace;
     font-size: 12px; line-height: 1.45;
@@ -167,7 +169,8 @@
     background: var(--card2); color: var(--fg);
     border: 1px solid var(--border); border-radius: 12px;
     font-size: 26px; font-weight: 700; padding: 0; line-height: 1;
-    user-select: none; touch-action: manipulation;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    touch-action: manipulation;
     transition: background .08s, transform .05s, border-color .08s;
   }
   .dpad button:hover { border-color: var(--accent); }
@@ -192,7 +195,8 @@
     background: var(--card2); border: 2px solid var(--border);
     color: var(--muted); font-size: 15px; font-weight: 800;
     letter-spacing: .1em; padding: 0;
-    user-select: none; touch-action: manipulation;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    touch-action: manipulation;
     transition: background .15s, color .15s, border-color .15s, box-shadow .15s, transform .05s;
     display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 6px;
   }
@@ -259,7 +263,7 @@
     box-shadow: 0 0 0 4px rgba(52,211,153,.15), 0 0 24px rgba(52,211,153,.25) inset;
   }
   .stateRow {
-    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
     gap: 6px; margin-top: 14px;
   }
   .stateChip {
@@ -286,7 +290,11 @@
     font-size: 12px; color: var(--muted);
     text-align: center; margin-top: 10px; font-variant-numeric: tabular-nums;
   }
-  #senderPreviewWrap.hidden, #remotePanel.hidden { display: none !important; }
+  #senderPreviewWrap.hidden { display: none !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -296,13 +304,13 @@
   <h1>LAN Stream</h1>
   <div class="card">
     <p>Enter a 4-digit code, then <b>Create Room</b> to host, or <b>Join Room</b> to watch.</p>
-    <input type="text" id="joinCode" placeholder="1234" maxlength="4" inputmode="numeric" autocomplete="off">
+    <input type="text" id="joinCode" placeholder="1234" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="Room code">
     <div class="row">
       <button id="joinBtn">Join Room</button>
       <button id="createBtn" class="secondary">Create Room</button>
     </div>
   </div>
-  <div id="setupStatus" class="note"></div>
+  <div id="setupStatus" class="note" role="status"></div>
 </div>
 
 <!-- ============ MAIN ============ -->
@@ -327,11 +335,12 @@
 
     <div id="cameraPanel" class="hidden">
       <div class="camRow">
-        <select id="camSelect"></select>
+        <select id="camSelect" aria-label="Camera"></select>
         <button id="camStartBtn">Start camera</button>
       </div>
       <div class="note">
         UVC USB webcams appear here automatically. Your browser will ask for camera and microphone permission.
+        Cameras without a microphone are supported (video only).
       </div>
     </div>
 
@@ -339,7 +348,7 @@
       <video id="preview" controls playsinline muted></video>
       <div class="controls">
         <button id="muteToggle" class="secondary small">🔊 Mute outgoing audio</button>
-        <span id="streamingBadge" class="note">Streaming live</span>
+        <span id="streamingBadge" class="note"></span>
       </div>
       <div class="note" id="senderHint">
         The viewer sees exactly what this player shows.
@@ -394,14 +403,11 @@
   <div id="serialCard" class="card hidden">
     <p class="label">ESP32 serial bridge (Web Serial / WebUSB)</p>
 
-    <div id="serialUnsupported" class="hidden" style="color:var(--warn); font-size:13px;">
-      ⚠ Neither <b>Web Serial</b> nor <b>WebUSB</b> is available in this browser.
-      Use <b>Chrome</b>/<b>Edge</b> on desktop, or <b>Chrome on Android</b> (which uses WebUSB).
-    </div>
+    <div id="serialUnsupported" class="hidden" style="color:var(--warn); font-size:13px;"></div>
 
     <div id="serialSupported">
       <div class="serialRow">
-        <select id="baudSelect">
+        <select id="baudSelect" aria-label="Baud rate">
           <option value="9600">9600</option>
           <option value="19200">19200</option>
           <option value="38400">38400</option>
@@ -417,10 +423,16 @@
       <div class="serialStatus">
         <span class="dot" id="serialDot"></span>
         <span id="serialStatusText">Not connected</span>
-        <label class="switchLabel">
-          <input type="checkbox" id="serialBridgeChk" checked>
-          Forward commands to MCU
-        </label>
+        <div class="serialOpts">
+          <label class="switchLabel">
+            <input type="checkbox" id="serialBridgeChk" checked>
+            Forward commands to MCU
+          </label>
+          <label class="switchLabel" title="Re-sends PRESS for every held arrow every 150 ms so the MCU can use a dead-man timeout.">
+            <input type="checkbox" id="serialKeepAliveChk">
+            Keep-alive (repeat held PRESS)
+          </label>
+        </div>
       </div>
 
       <div id="serialLog"></div>
@@ -435,6 +447,8 @@
         <code>UP:PRESS</code>, <code>UP:RELEASE</code>, <code>DOWN:PRESS</code>,
         <code>LEFT:RELEASE</code>, <code>RIGHT:PRESS</code>,
         <code>TOGGLE:ON</code>, <code>TOGGLE:OFF</code>.
+        <br>
+        If the viewer disconnects or goes silent for 3 s, all held arrows get <code>RELEASE</code> and the toggle gets <code>TOGGLE:OFF</code>.
         <br>
         On MicroPython, read lines with <code>sys.stdin.readline()</code> and split on <code>':'</code>.
       </div>
@@ -469,7 +483,7 @@
         </div>
       </div>
       <div class="note">
-        Arrows are momentary (hold to press, release to release). Toggle switches ON/OFF.
+        Arrows are momentary (hold to press, release to release). Arrow keys on a keyboard work too. Toggle switches ON/OFF.
       </div>
     </div>
   </div>
@@ -478,6 +492,13 @@
 <script>
 (function () {
   'use strict';
+
+  /* ---------------- Config ---------------- */
+  const ID_PREFIX = 'lanstream-';       // namespaces room codes on the public PeerJS server
+  const HEARTBEAT_MS = 1000;            // viewer -> sender
+  const SILENCE_TIMEOUT_MS = 3000;      // sender releases everything after this much silence
+  const KEEPALIVE_MS = 150;             // optional PRESS repeat to the MCU
+  const DIRS = ['up', 'down', 'left', 'right'];
 
   /* ---------------- Elements ---------------- */
   const $ = id => document.getElementById(id);
@@ -516,6 +537,7 @@
   const serialDot         = $('serialDot');
   const serialStatusText  = $('serialStatusText');
   const serialBridgeChk   = $('serialBridgeChk');
+  const serialKeepAliveChk = $('serialKeepAliveChk');
   const serialLog         = $('serialLog');
   const serialTestBtn     = $('serialTestBtn');
   const serialClearBtn    = $('serialClearBtn');
@@ -526,22 +548,28 @@
   let mediaCall = null;
   let stream = null;
   let role = null;               // 'sender' | 'viewer'
-  let connected = false;
+  let inMain = false;
   let currentMode = 'file';      // 'file' | 'camera'
   let audioEnabled = true;
+  let wakeLock = null;
+  let lastRx = 0;                // sender: time of last message from viewer
+  let hbTimer = null;            // viewer: heartbeat sender
+  let watchdogTimer = null;      // sender: silence watchdog
+  let keepAliveTimer = null;     // sender: optional PRESS repeater
 
-  // Serial state — Web Serial on desktop, WebUSB CDC-ACM on Android
+  // Serial state: Web Serial on desktop, WebUSB CDC-ACM on Android
   const hasSerial = ('serial' in navigator);
   const hasUSB    = ('usb' in navigator);
-  // Android Chrome has no Web Serial, but does have WebUSB. Desktop prefers Web Serial.
   const useUSB    = hasUSB && (!hasSerial || /Android/i.test(navigator.userAgent));
   const serialSupportedFlag = hasSerial || hasUSB;
 
   let serialPort   = null;
   let serialWriter = null;
   let serialReader = null;
+  let serialPipe   = null;
   let serialConnected = false;
   let serialWriteChain = Promise.resolve();
+  let serialUIReady = false;
 
   // WebUSB handles (used only when useUSB === true)
   let usbDev = null;
@@ -557,14 +585,34 @@
   };
 
   /* ---------------- UI helpers ---------------- */
-  function setStatus(text, ok) {
+  function setStatus(text, ok, warn) {
     statusText.textContent = text;
-    dot.className = ok ? 'dot ok' : 'dot';
+    dot.className = ok ? 'dot ok' : (warn ? 'dot warn' : 'dot');
   }
   function setupError(msg) { setupStatus.textContent = msg; setupStatus.style.color = 'var(--bad)'; }
   function setupInfo(msg)  { setupStatus.textContent = msg; setupStatus.style.color = 'var(--accent)'; }
 
+  function friendlyError(err, code) {
+    switch (err.type) {
+      case 'unavailable-id': return 'Room ' + code + ' is already taken. Pick a different code.';
+      case 'peer-unavailable': return 'No room with code ' + code + '. Check the code and try again.';
+      case 'network':
+      case 'server-error':
+      case 'socket-error':
+      case 'socket-closed': return 'Can\u2019t reach the signaling server. Check your internet connection.';
+      case 'browser-incompatible': return 'This browser doesn\u2019t support WebRTC.';
+      default: return 'Error: ' + err.type;
+    }
+  }
+
+  // Route errors to wherever the user is currently looking.
+  function showError(msg) {
+    if (inMain) setStatus(msg, false);
+    else setupError(msg);
+  }
+
   function enterMain() {
+    inMain = true;
     setup.classList.add('hidden');
     main.classList.remove('hidden');
     if (role === 'sender') {
@@ -583,29 +631,74 @@
     joinCodeInput.disabled = false;
   }
 
+  // Tear down a half-open peer after a failed setup so retries don't leak.
+  function abortSetup() {
+    if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+    dataConn = null;
+    role = null;
+    resetSetup();
+  }
+
+  // Shared handler for signaling-server disconnects.
+  function attachPeerCommon(p) {
+    p.on('disconnected', () => {
+      if (p.destroyed) return;
+      setStatus('Reconnecting\u2026', false, true);
+      try { p.reconnect(); } catch (e) {}
+    });
+    p.on('open', () => {
+      if (inMain) {
+        const open = dataConn && dataConn.open;
+        setStatus(open ? (role === 'sender' ? 'Viewer connected' : 'Connected to sender')
+                       : (role === 'sender' ? 'Waiting for viewer\u2026' : 'Sender disconnected'), !!open);
+      }
+    });
+  }
+
+  window.addEventListener('pagehide', () => {
+    releaseAll();
+    if (peer) { try { peer.destroy(); } catch (e) {} }
+    releaseWakeLock();
+  });
+
+  /* ---------------- Setup input niceties ---------------- */
+  joinCodeInput.addEventListener('input', () => {
+    joinCodeInput.value = joinCodeInput.value.replace(/\D/g, '').slice(0, 4);
+  });
+  joinCodeInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); joinBtn.click(); }
+  });
+  if (!window.isSecureContext) {
+    setupStatus.textContent = '\u26A0 This page isn\u2019t in a secure context (HTTPS or localhost). Camera, Web Serial and WebUSB will not work for the sender.';
+    setupStatus.style.color = 'var(--warn)';
+  }
+
   /* ---------------- Create room (sender) ---------------- */
   createBtn.onclick = () => {
-    role = 'sender';
     const code = joinCodeInput.value.trim();
     if (!/^\d{4}$/.test(code)) {
       setupError('Please enter a 4-digit room code before creating.');
       joinCodeInput.focus();
       return;
     }
+    role = 'sender';
 
     joinCodeInput.disabled = true;
     joinBtn.disabled = true;
     createBtn.disabled = true;
-    setupInfo('Creating room ' + code + '…');
+    setupInfo('Creating room ' + code + '\u2026');
 
-    peer = new Peer(code, { debug: 1 });
+    peer = new Peer(ID_PREFIX + code, { debug: 1 });
+    attachPeerCommon(peer);
 
     peer.on('open', (id) => {
-      setupInfo('Room ' + id + ' ready. Waiting for viewer to join…');
+      if (inMain) return;                 // re-fired after a reconnect
+      setupInfo('Room ' + code + ' ready. Waiting for viewer to join\u2026');
       enterMain();
-      setStatus('Waiting for viewer…', false);
+      setStatus('Waiting for viewer\u2026', false);
       refreshCameras();
       initSerialUI();
+      requestWakeLock();
     });
 
     peer.on('connection', (conn) => {
@@ -613,33 +706,37 @@
       dataConn = conn;
 
       conn.on('open', () => {
-        connected = true;
+        lastRx = Date.now();
+        startWatchdog();
         setStatus('Viewer connected', true);
         if (stream) startCall(conn.peer);
+        else updateBadge();
       });
 
       conn.on('data', (data) => {
-        if (data && data.type === 'ctrl') {
-          handleCtrlCommand(data);
-        }
+        lastRx = Date.now();
+        if (data && data.type === 'ctrl') handleCtrlCommand(data);
       });
 
       conn.on('close', () => {
-        connected = false;
+        if (dataConn !== conn) return;
+        releaseAll();
+        stopWatchdog();
+        dataConn = null;
+        if (mediaCall) { try { mediaCall.close(); } catch (e) {} mediaCall = null; }
         setStatus('Viewer left', false);
         resetRemoteDisplay();
+        updateBadge();
       });
       conn.on('error', () => {});
     });
 
     peer.on('error', (err) => {
       console.error(err);
-      if (err.type === 'unavailable-id') {
-        setupError('Room ' + code + ' is already taken. Pick a different code.');
-      } else {
-        setupError('Error: ' + err.type);
-      }
-      resetSetup();
+      const msg = friendlyError(err, code);
+      if (inMain) { setStatus(msg, false); return; }
+      setupError(msg);
+      abortSetup();
     });
   };
 
@@ -652,42 +749,50 @@
     joinBtn.disabled = true;
     createBtn.disabled = true;
     joinCodeInput.disabled = true;
-    setupInfo('Joining ' + code + '…');
+    setupInfo('Joining ' + code + '\u2026');
 
     peer = new Peer({ debug: 1 });
+    attachPeerCommon(peer);
+    let timeout = null;
 
     peer.on('open', () => {
-      const conn = peer.connect(code, { reliable: true });
+      if (dataConn) return;               // re-fired after a reconnect
+      const conn = peer.connect(ID_PREFIX + code, { reliable: true });
       dataConn = conn;
 
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
         if (!conn.open) {
           setupError('Could not reach room ' + code + '. Check the code and try again.');
           try { conn.close(); } catch (e) {}
-          resetSetup();
+          abortSetup();
         }
       }, 8000);
 
       conn.on('open', () => {
         clearTimeout(timeout);
-        connected = true;
         enterMain();
         setStatus('Connected to sender', true);
         remotePanel.classList.remove('hidden');
+        startHeartbeat();
       });
       conn.on('close', () => {
-        connected = false;
+        stopHeartbeat();
         setStatus('Sender disconnected', false);
         remotePanel.classList.add('hidden');
+        showWaiting();                    // a dead sender often leaves a frozen frame
       });
       conn.on('error', () => {});
     });
 
     peer.on('call', (call) => {
-      call.answer();
+      const old = mediaCall;
       mediaCall = call;
+      if (old) { try { old.close(); } catch (e) {} }
+      call.answer();
 
       call.on('stream', (remoteStream) => {
+        if (mediaCall !== call) return;
+        if (remote.srcObject === remoteStream) return;   // PeerJS can fire this more than once
         viewerWait.classList.add('hidden');
         remote.classList.remove('hidden');
         remote.srcObject = remoteStream;
@@ -695,9 +800,9 @@
       });
 
       call.on('close', () => {
-        remote.srcObject = null;
-        remote.classList.add('hidden');
-        viewerWait.classList.remove('hidden');
+        if (mediaCall !== call) return;   // an older call closing after a newer stream arrived
+        mediaCall = null;
+        showWaiting();
       });
 
       call.on('error', (err) => console.error('call error', err));
@@ -705,13 +810,60 @@
 
     peer.on('error', (err) => {
       console.error(err);
-      setupError('Error: ' + err.type);
-      resetSetup();
+      clearTimeout(timeout);
+      const msg = friendlyError(err, code);
+      if (inMain) { setStatus(msg, false); return; }
+      setupError(msg);
+      abortSetup();
     });
   };
 
+  function showWaiting() {
+    remote.srcObject = null;
+    remote.classList.add('hidden');
+    viewerWait.classList.remove('hidden');
+    const ov = document.getElementById('playOverlay');
+    if (ov) ov.remove();
+  }
+
+  /* ---------------- Heartbeat / watchdog ---------------- */
+  function startHeartbeat() {
+    stopHeartbeat();
+    hbTimer = setInterval(() => {
+      if (dataConn && dataConn.open) { try { dataConn.send({ type: 'hb' }); } catch (e) {} }
+    }, HEARTBEAT_MS);
+  }
+  function stopHeartbeat() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
+
+  function startWatchdog() {
+    stopWatchdog();
+    watchdogTimer = setInterval(() => {
+      if (Date.now() - lastRx > SILENCE_TIMEOUT_MS && anythingHeld()) {
+        logSerial('Viewer silent for ' + (SILENCE_TIMEOUT_MS / 1000) + ' s \u2014 releasing all', 'sys');
+        releaseAll();
+      }
+    }, 1000);
+  }
+  function stopWatchdog() { if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; } }
+
+  /* ---------------- Screen wake lock (keeps a phone bridge alive) ---------------- */
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (e) { /* not fatal */ }
+  }
+  function releaseWakeLock() {
+    if (wakeLock) { try { wakeLock.release(); } catch (e) {} wakeLock = null; }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && role === 'sender' && inMain) requestWakeLock();
+  });
+
   /* ============================================================
-     SOURCE MODE — file vs camera
+     SOURCE MODE: file vs camera
      ============================================================ */
 
   function setMode(mode) {
@@ -737,6 +889,7 @@
 
   function hidePreview() {
     previewWrap.classList.add('hidden');
+    preview.onloadedmetadata = null;      // otherwise it fires again later and restarts the call
     try { preview.pause(); } catch (e) {}
     preview.srcObject = null;
     preview.removeAttribute('src');
@@ -745,18 +898,28 @@
       URL.revokeObjectURL(preview.dataset.objectUrl);
       delete preview.dataset.objectUrl;
     }
+    fileInput.value = '';                 // lets the same file be picked again
     streamingBadge.textContent = '';
   }
 
   function stopCurrentStream() {
     if (stream) {
-      stream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+      stream.getTracks().forEach(t => { try { t.onended = null; t.stop(); } catch (e) {} });
       stream = null;
     }
     if (mediaCall) {
       try { mediaCall.close(); } catch (e) {}
       mediaCall = null;
     }
+  }
+
+  function viewerReady() { return !!(dataConn && dataConn.open); }
+
+  function updateBadge() {
+    if (!stream) { streamingBadge.textContent = ''; return; }
+    if (!viewerReady()) streamingBadge.textContent = '\u23F3 Ready, waiting for viewer\u2026';
+    else if (mediaCall) streamingBadge.textContent = '\uD83D\uDD34 Streaming live';
+    else streamingBadge.textContent = 'Stream ended';
   }
 
   /* ---------------- File mode ---------------- */
@@ -768,23 +931,25 @@
     stopCurrentStream();
     hidePreview();
 
+    preview.controls = true;
     const url = URL.createObjectURL(file);
     preview.dataset.objectUrl = url;
     preview.src = url;
     preview.muted = true;
     preview.load();
 
-    senderHint.innerHTML = 'The viewer sees exactly what this player shows — pause, seek, and play are shared live.';
+    senderHint.textContent = 'The viewer sees exactly what this player shows \u2014 pause, seek, and play are shared live.';
 
     preview.onloadedmetadata = () => {
       preview.play().then(() => {
         if (!stream) captureFromPreview();
-        if (stream && dataConn && dataConn.open) startCall(dataConn.peer);
+        if (stream && viewerReady()) startCall(dataConn.peer);
         previewWrap.classList.remove('hidden');
         applyAudioState();
-        streamingBadge.textContent = stream ? '🔴 Streaming live' : '';
+        updateBadge();
       }).catch((err) => {
-        senderHint.innerHTML = '<span style="color:var(--warn)">⚠ Autoplay blocked. Click play on the preview.</span>';
+        previewWrap.classList.remove('hidden');
+        senderHint.innerHTML = '<span style="color:var(--warn)">\u26A0 Autoplay blocked. Click play on the preview.</span>';
         console.warn('play() failed:', err);
       });
     };
@@ -800,8 +965,13 @@
       return;
     }
     if (stream.getVideoTracks().length === 0) {
+      // Tracks can appear a moment late; re-capture and restart the call so the viewer gets them.
       setTimeout(() => {
-        if (preview.captureStream) stream = preview.captureStream();
+        if (currentMode !== 'file' || !preview.captureStream || !preview.src) return;
+        stream = preview.captureStream();
+        applyAudioState();
+        if (viewerReady()) startCall(dataConn.peer);
+        updateBadge();
       }, 200);
     }
   }
@@ -839,11 +1009,28 @@
     }
   }
 
+  // Hot-plugged webcams show up without a reload.
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', refreshCameras);
+  }
+
+  async function getCamStream(video) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video, audio: true });
+    } catch (e) {
+      if (e.name === 'NotAllowedError' || e.name === 'SecurityError') throw e;
+      // Typically NotFoundError on a webcam with no mic: retry video-only.
+      return await navigator.mediaDevices.getUserMedia({ video, audio: false });
+    }
+  }
+
   camStartBtn.onclick = async () => { await startCamera(); };
 
   async function startCamera() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      alert('Camera API not available in this browser.');
+      alert(window.isSecureContext
+        ? 'Camera API not available in this browser.'
+        : 'Camera access needs a secure context. Open this page over HTTPS or from localhost.');
       return;
     }
 
@@ -851,23 +1038,32 @@
     hidePreview();
 
     const deviceId = camSelect.value || undefined;
-    const constraints = {
-      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'environment' },
-      audio: true
-    };
+    const video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'environment' };
 
     try {
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      stream = await getCamStream(video);
     } catch (err) {
       console.error(err);
       alert('Could not start camera: ' + (err.message || err.name));
       return;
     }
 
+    const vt = stream.getVideoTracks()[0];
+    if (vt) {
+      vt.onended = () => {
+        streamingBadge.textContent = '\u26A0 Camera disconnected';
+        if (mediaCall) { try { mediaCall.close(); } catch (e) {} mediaCall = null; }
+        stream = null;
+      };
+    }
+
+    preview.controls = false;             // pausing/seeking a live feed is meaningless
     preview.srcObject = stream;
     preview.muted = true;
     previewWrap.classList.remove('hidden');
-    senderHint.innerHTML = 'Live camera feed. The viewer sees this in real time.';
+    senderHint.textContent = stream.getAudioTracks().length
+      ? 'Live camera feed. The viewer sees this in real time.'
+      : 'Live camera feed (video only, no microphone found).';
 
     try { await preview.play(); } catch (e) { console.warn('preview play failed', e); }
 
@@ -876,11 +1072,8 @@
 
     applyAudioState();
 
-    if (dataConn && dataConn.open) {
-      startCall(dataConn.peer);
-    } else {
-      streamingBadge.textContent = '⏳ Waiting for viewer to connect…';
-    }
+    if (viewerReady()) startCall(dataConn.peer);
+    else updateBadge();
   }
 
   /* ---------------- Outgoing audio control ---------------- */
@@ -893,24 +1086,27 @@
     audioEnabled = !audioEnabled;
     applyAudioState();
     muteToggle.textContent = audioEnabled
-      ? '🔊 Mute outgoing audio'
-      : '🔇 Unmute outgoing audio';
+      ? '\uD83D\uDD0A Mute outgoing audio'
+      : '\uD83D\uDD07 Unmute outgoing audio';
   };
 
   /* ---------------- Start / restart WebRTC call ---------------- */
   function startCall(viewerPeerId) {
-    if (!stream) return;
+    if (!stream || !peer) return;
     if (mediaCall) { try { mediaCall.close(); } catch (e) {} mediaCall = null; }
 
-    mediaCall = peer.call(viewerPeerId, stream);
-    streamingBadge.textContent = '🔴 Streaming live';
+    const call = peer.call(viewerPeerId, stream);
+    mediaCall = call;
+    updateBadge();
 
-    mediaCall.on('error', (err) => {
+    call.on('error', (err) => {
       console.error('call error', err);
-      streamingBadge.textContent = '⚠ Stream error: ' + err;
+      if (mediaCall === call) streamingBadge.textContent = '\u26A0 Stream error: ' + err;
     });
-    mediaCall.on('close', () => {
-      streamingBadge.textContent = 'Stream ended';
+    call.on('close', () => {
+      if (mediaCall !== call) return;     // replaced by a newer call, don't clobber its badge
+      mediaCall = null;
+      updateBadge();
     });
   }
 
@@ -919,13 +1115,13 @@
     if (document.getElementById('playOverlay')) return;
     const overlay = document.createElement('div');
     overlay.id = 'playOverlay';
-    overlay.innerHTML = '<div>▶ Tap to play</div>';
+    overlay.innerHTML = '<div>\u25B6 Tap to play</div>';
     overlay.onclick = () => { remote.play().then(() => overlay.remove()).catch(() => {}); };
     document.body.appendChild(overlay);
   }
 
   /* ============================================================
-     REMOTE CONTROL — Viewer side: send commands
+     REMOTE CONTROL: Viewer side, send commands
      ============================================================ */
 
   function sendCtrl(ctrlId, state) {
@@ -935,16 +1131,18 @@
     } catch (e) { console.warn('send failed', e); }
   }
 
+  const momentary = {};   // ctrlId -> { down(), up() } so the keyboard can reuse the same logic
+
   function attachMomentary(btn, ctrlId) {
     let active = false;
 
     const press = (e) => {
-      e.preventDefault();
+      if (e) e.preventDefault();
       if (active) return;
       active = true;
       btn.classList.add('pressed');
       try {
-        if (e.pointerId != null && btn.setPointerCapture) {
+        if (e && e.pointerId != null && btn.setPointerCapture) {
           btn.setPointerCapture(e.pointerId);
         }
       } catch (_) {}
@@ -957,6 +1155,8 @@
       btn.classList.remove('pressed');
       sendCtrl(ctrlId, 'released');
     };
+
+    momentary[ctrlId] = { down: () => press(null), up: release };
 
     btn.addEventListener('pointerdown', press);
     btn.addEventListener('pointerup', release);
@@ -973,6 +1173,27 @@
     attachMomentary(btn, btn.dataset.ctrl);
   });
 
+  // Keyboard arrows (viewer only)
+  const KEYMAP = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+  window.addEventListener('keydown', (e) => {
+    const id = KEYMAP[e.key];
+    if (!id || e.repeat || role !== 'viewer' || remotePanel.classList.contains('hidden')) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+    e.preventDefault();
+    momentary[id] && momentary[id].down();
+  });
+  window.addEventListener('keyup', (e) => {
+    const id = KEYMAP[e.key];
+    if (!id || role !== 'viewer') return;
+    momentary[id] && momentary[id].up();
+  });
+  // Never leave an arrow held if the tab loses focus.
+  window.addEventListener('blur', () => {
+    if (role !== 'viewer') return;
+    DIRS.forEach(id => momentary[id] && momentary[id].up());
+  });
+
   let toggleOn = false;
   toggleBtn.addEventListener('click', (e) => {
     e.preventDefault();
@@ -984,37 +1205,64 @@
   });
 
   /* ============================================================
-     REMOTE CONTROL — Sender side: display + forward to serial
+     REMOTE CONTROL: Sender side, display + forward to serial
      ============================================================ */
 
   function handleCtrlCommand(msg) {
     const id = msg.id;
     const state = msg.state;
-    if (id !== 'toggle' && id !== 'up' && id !== 'down' && id !== 'left' && id !== 'right') return;
 
+    // Whitelist both fields so a peer can't inject anything into the serial stream.
     if (id === 'toggle') {
+      if (state !== 'on' && state !== 'off') return;
       remoteState.toggle = (state === 'on');
-    } else {
+    } else if (DIRS.indexOf(id) !== -1) {
+      if (state !== 'pressed' && state !== 'released') return;
       remoteState[id] = state;
+    } else {
+      return;
     }
 
     updateRemoteDisplay();
     updateLastCmd(id, state);
 
-    // Forward to ESP32 over USB serial
     if (serialConnected && serialBridgeChk.checked) {
       const line = commandToSerialLine(id, state);
       if (line) sendSerial(line);
     }
+    updateKeepAlive();
   }
 
   function commandToSerialLine(id, state) {
     if (id === 'toggle') return 'TOGGLE:' + (state === 'on' ? 'ON' : 'OFF');
-    if (id === 'up' || id === 'down' || id === 'left' || id === 'right') {
-      return id.toUpperCase() + ':' + (state === 'pressed' ? 'PRESS' : 'RELEASE');
-    }
-    return null;
+    return id.toUpperCase() + ':' + (state === 'pressed' ? 'PRESS' : 'RELEASE');
   }
+
+  function anythingHeld() {
+    return remoteState.toggle || DIRS.some(k => remoteState[k] === 'pressed');
+  }
+
+  // Failsafe: push RELEASE / TOGGLE:OFF to the MCU for anything still active.
+  function releaseAll() {
+    DIRS.forEach(k => {
+      if (remoteState[k] === 'pressed') handleCtrlCommand({ type: 'ctrl', id: k, state: 'released' });
+    });
+    if (remoteState.toggle) handleCtrlCommand({ type: 'ctrl', id: 'toggle', state: 'off' });
+  }
+
+  // Optional dead-man support: repeat PRESS for every held arrow.
+  function updateKeepAlive() {
+    const want = serialKeepAliveChk.checked && serialConnected && DIRS.some(k => remoteState[k] === 'pressed');
+    if (want && !keepAliveTimer) {
+      keepAliveTimer = setInterval(() => {
+        if (!serialConnected || !serialBridgeChk.checked) return;
+        DIRS.forEach(k => { if (remoteState[k] === 'pressed') sendSerial(k.toUpperCase() + ':PRESS', true); });
+      }, KEEPALIVE_MS);
+    } else if (!want && keepAliveTimer) {
+      clearInterval(keepAliveTimer); keepAliveTimer = null;
+    }
+  }
+  serialKeepAliveChk.addEventListener('change', updateKeepAlive);
 
   function updateRemoteDisplay() {
     document.querySelectorAll('.dpadView .cell[data-cell]').forEach(cell => {
@@ -1022,7 +1270,7 @@
       cell.classList.toggle('active', remoteState[key] === 'pressed');
     });
 
-    ['up','down','left','right'].forEach(key => {
+    DIRS.forEach(key => {
       const chip = $('chip-' + key);
       if (!chip) return;
       const pressed = remoteState[key] === 'pressed';
@@ -1050,23 +1298,30 @@
     const el = $('lastCmd');
     if (!el) return;
     const ts = new Date().toLocaleTimeString();
-    el.textContent = 'Last: ' + id.toUpperCase() + ' → ' + state.toUpperCase() + '   (' + ts + ')';
+    el.textContent = 'Last: ' + id.toUpperCase() + ' \u2192 ' + state.toUpperCase() + '   (' + ts + ')';
   }
 
   function resetRemoteDisplay() {
-    remoteState.up = remoteState.down = remoteState.left = remoteState.right = 'released';
+    DIRS.forEach(k => { remoteState[k] = 'released'; });
     remoteState.toggle = false;
     updateRemoteDisplay();
+    updateKeepAlive();
     const el = $('lastCmd');
     if (el) el.textContent = 'No commands received yet.';
   }
 
   /* ============================================================
-     SERIAL BRIDGE — Web Serial (desktop) or WebUSB CDC (Android)
+     SERIAL BRIDGE: Web Serial (desktop) or WebUSB CDC (Android)
      ============================================================ */
 
   function initSerialUI() {
-    if (!serialSupportedFlag) {
+    if (serialUIReady) return;            // never double-bind click handlers
+    serialUIReady = true;
+
+    if (!serialSupportedFlag || !window.isSecureContext) {
+      serialUnsupported.innerHTML = !window.isSecureContext
+        ? '\u26A0 Web Serial and WebUSB need a secure context. Open this page over <b>HTTPS</b> or from <b>localhost</b>.'
+        : '\u26A0 Neither <b>Web Serial</b> nor <b>WebUSB</b> is available in this browser. Use <b>Chrome</b>/<b>Edge</b> on desktop, or <b>Chrome on Android</b> (which uses WebUSB).';
       serialUnsupported.classList.remove('hidden');
       serialSupported.classList.add('hidden');
       return;
@@ -1077,7 +1332,7 @@
     });
     serialClearBtn.addEventListener('click', () => { serialLog.innerHTML = ''; });
 
-    // Baud rate is meaningless for native-USB CDC; hide the picker in USB mode.
+    // Baud rate is meaningless for native-USB CDC.
     if (useUSB) {
       baudSelect.disabled = true;
       baudSelect.title = 'Baud rate is not configurable over native USB CDC.';
@@ -1102,11 +1357,8 @@
   }
 
   async function onSerialConnectClick() {
-    if (serialConnected) {
-      await disconnectSerial();
-    } else {
-      await connectSerial();
-    }
+    if (serialConnected) await disconnectSerial();
+    else await connectSerial();
   }
 
   async function connectSerial() {
@@ -1125,8 +1377,7 @@
           if (c === 10) data = i;
         }
         if (ctrl === null || !data) {
-          await usbDev.close(); usbDev = null;
-          throw new Error('No CDC serial interface — connect a native-USB board (ESP32-S2/S3/C3, or a CDC-ACM UART bridge)');
+          throw new Error('No CDC serial interface \u2014 connect a native-USB board (ESP32-S2/S3/C3, or a CDC-ACM UART bridge)');
         }
 
         await usbDev.claimInterface(ctrl);
@@ -1136,9 +1387,8 @@
         const inEp  = eps.find(e => e.direction === 'in');
         const outEp = eps.find(e => e.direction === 'out');
         if (!inEp || !outEp) {
-          await usbDev.releaseInterface(data.interfaceNumber);
-          await usbDev.releaseInterface(ctrl);
-          await usbDev.close(); usbDev = null;
+          try { await usbDev.releaseInterface(data.interfaceNumber); } catch (e) {}
+          try { await usbDev.releaseInterface(ctrl); } catch (e) {}
           throw new Error('CDC interface has no bulk IN/OUT endpoints');
         }
         usbInEp  = inEp.endpointNumber;
@@ -1146,7 +1396,7 @@
         usbCtrlN = ctrl;
         usbDataN = data.interfaceNumber;
 
-        // CDC SET_CONTROL_LINE_STATE (DTR=1, RTS=1) — needed by most CDC stacks.
+        // CDC SET_CONTROL_LINE_STATE (DTR=1, RTS=1), needed by most CDC stacks.
         await usbDev.controlTransferOut({
           requestType: 'class', recipient: 'interface',
           request: 0x22, value: 1, index: ctrl
@@ -1169,14 +1419,24 @@
         sendSerial('HELLO');
       }
     } catch (err) {
-      console.error(err);
-      logSerial('Connect failed: ' + (err.message || err), 'err');
+      if (err && (err.name === 'NotFoundError' || err.name === 'AbortError')) {
+        logSerial('Port selection cancelled', 'sys');     // user closed the picker; not an error
+      } else {
+        console.error(err);
+        logSerial('Connect failed: ' + (err.message || err), 'err');
+      }
+      if (usbDev) { try { await usbDev.close(); } catch (e) {} }
+      if (serialPort && !serialConnected) { try { await serialPort.close(); } catch (e) {} }
       cleanupSerial();
     }
   }
 
   async function disconnectSerial() {
+    const wasConnected = serialConnected;
+    serialConnected = false;              // stop new writes and the read loops
+    if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
     try {
+      await serialWriteChain.catch(() => {});
       if (useUSB) {
         if (usbDev) {
           try { await usbDev.releaseInterface(usbDataN); } catch (e) {}
@@ -1184,15 +1444,17 @@
           try { await usbDev.close(); } catch (e) {}
         }
       } else {
-        if (serialReader) { try { await serialReader.cancel(); } catch (e) {} serialReader = null; }
+        // Order matters: cancel the reader, wait for the pipe to drop its lock, then close.
+        if (serialReader) { try { await serialReader.cancel(); } catch (e) {} }
+        if (serialPipe)   { try { await serialPipe; } catch (e) {} }
         if (serialWriter) { try { serialWriter.releaseLock(); } catch (e) {} serialWriter = null; }
-        if (serialPort)   { try { await serialPort.close(); }       catch (e) {} serialPort = null; }
+        if (serialPort)   { try { await serialPort.close(); } catch (e) { console.warn('port close', e); } }
       }
     } catch (err) {
       console.warn('disconnectSerial', err);
     } finally {
       cleanupSerial();
-      logSerial('Disconnected', 'sys');
+      if (wasConnected) logSerial('Disconnected', 'sys');
     }
   }
 
@@ -1200,17 +1462,19 @@
     serialConnected = false;
     serialWriter = null;
     serialReader = null;
+    serialPipe = null;
     serialPort = null;
     usbDev = null;
     usbInEp = usbOutEp = usbCtrlN = usbDataN = null;
+    if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
     updateSerialUI(false);
   }
 
   function updateSerialUI(isConnected, baud) {
     serialDot.className = isConnected ? 'dot ok' : 'dot';
-    serialStatusText.textContent = isConnected
-      ? 'Connected' + (baud ? ' @ ' + baud + (baud === 'USB' ? '' : ' baud') : '')
-      : 'Not connected';
+    serialStatusText.textContent = !isConnected
+      ? 'Not connected'
+      : (baud === 'USB' ? 'Connected via USB' : 'Connected' + (baud ? ' @ ' + baud + ' baud' : ''));
     serialConnectBtn.textContent = isConnected ? 'Disconnect serial' : 'Connect serial';
     serialConnectBtn.classList.toggle('secondary', isConnected);
   }
@@ -1225,7 +1489,7 @@
     serialLog.scrollTop = serialLog.scrollHeight;
   }
 
-  function sendSerial(line) {
+  function sendSerial(line, quiet) {
     if (!serialConnected) return;
     // Serialize writes so concurrent commands don't clobber each other.
     serialWriteChain = serialWriteChain.then(async () => {
@@ -1239,7 +1503,7 @@
           if (!serialWriter) return;
           await serialWriter.write(bytes);
         }
-        logSerial('→ ' + line, 'tx');
+        if (!quiet) logSerial('\u2192 ' + line, 'tx');
       } catch (err) {
         console.error('write failed', err);
         logSerial('Write failed: ' + (err.message || err), 'err');
@@ -1254,6 +1518,21 @@
     return readSerialWebSerial();
   }
 
+  function drainLines(buffer) {
+    let idx;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      let line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      if (line) logSerial('\u2190 ' + line, 'rx');
+    }
+    if (buffer.length > 4096) {
+      logSerial('\u2190 ' + buffer, 'rx');
+      buffer = '';
+    }
+    return buffer;
+  }
+
   // ---- WebUSB read loop ----
   async function readSerialUSB() {
     if (!usbDev || usbInEp == null) return;
@@ -1266,8 +1545,7 @@
           r = await usbDev.transferIn(usbInEp, 4096);
         } catch (e) {
           if (!serialConnected) break;
-          // Transient transfer errors: back off briefly and retry.
-          await new Promise(res => setTimeout(res, 100));
+          await new Promise(res => setTimeout(res, 100));   // transient error: back off and retry
           continue;
         }
         if (r.status === 'stall') {
@@ -1277,31 +1555,20 @@
         if (!r.data || !r.data.byteLength) continue;
 
         const chunk = new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength);
-        buffer += decoder.decode(chunk, { stream: true });
-        let idx;
-        while ((idx = buffer.indexOf('\n')) >= 0) {
-          let line = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 1);
-          if (line.endsWith('\r')) line = line.slice(0, -1);
-          if (line) logSerial('← ' + line, 'rx');
-        }
-        if (buffer.length > 4096) {
-          logSerial('← ' + buffer, 'rx');
-          buffer = '';
-        }
+        buffer = drainLines(buffer + decoder.decode(chunk, { stream: true }));
       }
     } catch (err) {
       if (serialConnected) console.warn('USB reader ended', err);
     }
   }
 
-  // ---- Web Serial read loop (unchanged behaviour) ----
+  // ---- Web Serial read loop ----
   async function readSerialWebSerial() {
     if (!serialPort || !serialPort.readable) return;
 
     const decoder = new TextDecoderStream();
-    // Pipe errors are expected when we close the port.
-    serialPort.readable.pipeTo(decoder.writable).catch(() => {});
+    // Keep the pipe promise so disconnect can wait for it to release the port's lock.
+    serialPipe = serialPort.readable.pipeTo(decoder.writable).catch(() => {});
     const reader = decoder.readable.getReader();
     serialReader = reader;
 
@@ -1310,24 +1577,13 @@
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        buffer += value;
-        let idx;
-        while ((idx = buffer.indexOf('\n')) >= 0) {
-          let line = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 1);
-          if (line.endsWith('\r')) line = line.slice(0, -1);
-          if (line) logSerial('← ' + line, 'rx');
-        }
-        if (buffer.length > 4096) {
-          logSerial('← ' + buffer, 'rx');
-          buffer = '';
-        }
+        buffer = drainLines(buffer + value);
       }
     } catch (err) {
       console.warn('serial reader ended', err);
     } finally {
       try { reader.releaseLock(); } catch (e) {}
-      serialReader = null;
+      if (serialReader === reader) serialReader = null;
     }
   }
 
